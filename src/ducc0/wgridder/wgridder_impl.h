@@ -345,9 +345,9 @@ public:
 double tu = ufac*coord_(i,0);
 double tv = vfac*coord_(i,1);
 double tw = wfac*coord_(i,2);
-        coord[i] = UVW(tu-r_l*tw, tv-r_m*tw, tw);
-        umax = max(umax, abs(coord_(i,0)));
-        vmax = max(vmax, abs(coord_(i,1)));
+        coord[i] = UVW(tu+r_l*tw, tv+r_m*tw, tw);
+        umax = max(umax, abs(coord[i].u));
+        vmax = max(vmax, abs(coord[i].v));
         }
       umax *= fcmax;
       vmax *= fcmax;
@@ -1451,8 +1451,8 @@ timers.pop();
               {
               // accurate form of sqrt(1-xsq-ysq)-1 for nm1 close to zero
               auto nm1 = (-xsq-ysq)/(sqrt(tmp)+1);
-nm1 += bl.r_l*(x0+i*pixsize_x) + bl.r_m*(y0+j*pixsize_y);
-              fct = krn->corfunc((nm1+nshift)*dw);
+              fct = krn->corfunc((nm1 + bl.r_l*(x0+i*pixsize_x)
+                    + bl.r_m*(y0+j*pixsize_y) + nshift)*dw);
               if (divide_by_n)
                 fct /= nm1+1;
               }
@@ -1610,8 +1610,8 @@ nm1 += bl.r_l*(x0+i*pixsize_x) + bl.r_m*(y0+j*pixsize_y);
           nm1max = max(nm1max, nval);
           }
 double nm1minb = 1e300, nm1maxb = -1e300;
-xext.push_back(0.5*(xmin+xmax));
-yext.push_back(0.5*(ymin+ymax));
+xext.push_back(lshift);
+yext.push_back(mshift);
       for (auto xc: xext)
         for (auto yc: yext)
           {
@@ -1621,11 +1621,6 @@ nval += bl.r_l*xc + bl.r_m*yc;
           nm1minb = min(nm1minb, nval);
           nm1maxb = max(nm1maxb, nval);
           }
-cout << "bla" << endl;
-cout << xmin <<" " << xmax << endl;
-cout << ymin <<" " << ymax << endl;
-cout << nm1min <<" " << nm1max << endl;
-cout << nm1minb <<" " << nm1maxb << endl;
 nm1min = nm1minb;
 nm1max = nm1maxb;
 
@@ -1784,9 +1779,24 @@ nm1max = nm1maxb;
         no_nshift(!allow_nshift)
       {
       timers.push("Baseline construction");
-double r_l = lshift / sqrt(1. - lshift*lshift - mshift*mshift);
-double r_m = mshift / sqrt(1. - lshift*lshift - mshift*mshift);
-//r_l=r_m=0;
+      double r_l = 0., r_m = 0.;
+      if (do_wgridding && lmshift)
+        {
+        double xmin = lshift - 0.5*nxdirty*pixsize_x,
+               xmax = xmin + (nxdirty-1)*pixsize_x,
+               ymin = mshift - 0.5*nydirty*pixsize_y,
+               ymax = ymin + (nydirty-1)*pixsize_y;
+        auto inside_horizon = [](double x, double y)
+          { return x*x+y*y < 1.; };
+        // Keep the existing beyond-horizon path unchanged for now.
+        if (inside_horizon(xmin,ymin) && inside_horizon(xmin,ymax)
+            && inside_horizon(xmax,ymin) && inside_horizon(xmax,ymax))
+          {
+          double n0 = sqrt(1. - lshift*lshift - mshift*mshift);
+          r_l = lshift/n0;
+          r_m = mshift/n0;
+          }
+        }
       bl = Baselines(uvw, freqlist_id, freqlist_nfreqs, freqlist_freqs, flip_u, flip_v, flip_w, r_l, r_m);
       MR_assert(bl.Nrows()<(uint64_t(1)<<32), "too many rows in the MS");
  //     MR_assert(bl.Nchannels()<(uint64_t(1)<<16), "too many channels in the MS");
