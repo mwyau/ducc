@@ -1,4 +1,4 @@
-name: ducc-tests
+name: test-all-platforms
 on:
   workflow_dispatch:
     inputs:
