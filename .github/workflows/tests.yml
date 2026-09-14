@@ -54,6 +54,12 @@ jobs:
             python: '3.15t'
           - name: ubuntu-22.04
             os: ubuntu-22.04
+          - name: ubuntu-24.04-intel
+            os: ubuntu-24.04
+            compiler: intel
+          - name: ubuntu-24.04-clang
+            os: ubuntu-24.04
+            compiler: clang
           - name: ubuntu-26.04
             os: ubuntu-26.04
           - name: ubuntu-22.04-arm
@@ -76,9 +82,6 @@ jobs:
             os: windows-2025
           - name: windows-11-arm
             os: windows-11-arm
-          - name: ubuntu-24.04-intel
-            os: ubuntu-24.04
-            compiler: intel
         binding: ${{ fromJSON(inputs.binding == 'both' && '["pybind11","nanobind"]' || format('["{0}"]', inputs.binding)) }}
         optimization: ${{ fromJSON(inputs.optimization == 'both' && '["native","portable"]' || format('["{0}"]', inputs.optimization)) }}
         exclude:
@@ -105,7 +108,7 @@ jobs:
           sudo apt install intel-oneapi-compiler-dpcpp-cpp
 
       - name: Build and install
-        if: matrix.platform.compiler != 'intel'
+        if: matrix.platform.compiler != 'intel' && matrix.platform.compiler != 'clang'
         shell: bash
         run: ${{ matrix.binding == 'nanobind' && 'DUCC0_USE_NANOBIND=1' || '' }} python -m pip install --user .
 
@@ -116,6 +119,13 @@ jobs:
           source /opt/intel/oneapi/setvars.sh intel64
           echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
           ${{ matrix.binding == 'nanobind' && 'DUCC0_USE_NANOBIND=1' || '' }} CC=icx CXX=icpx python -m pip install --user .
+
+      - name: Build and install with Clang
+        if: matrix.platform.compiler == 'clang'
+        shell: bash
+        run: |
+          clang --version
+          ${{ matrix.binding == 'nanobind' && 'DUCC0_USE_NANOBIND=1' || '' }} CC=clang CXX=clang++ python -m pip install --user .
 
       - name: Verify binding
         run: python -c "import ducc0; assert ducc0.__wrapper__ == '${{ matrix.binding }}'; print(ducc0.__wrapper__)"
