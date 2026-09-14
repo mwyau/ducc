@@ -887,39 +887,10 @@ template<typename Tsimd> inline void unaligned_add(typename Tsimd::value_type *p
 }
 #endif
 
-#if (!defined(DUCC0_NO_SIMD)) && (defined(__AVX__) || defined(__SSE3__))
-#include <immintrin.h>
-#endif
-
 namespace ducc0 {
 
 template<typename T, size_t N> using bounded_simd = typename simd_select<T,
   std::min<size_t>(N, native_simd<T>::size())>::type;
-
-template<typename T> inline std::complex<T> hsum_cmplx
-  (bounded_simd<T,8> vr, bounded_simd<T,8> vi)
-  { return std::complex<T>(reduce(vr, std::plus<>()), reduce(vi, std::plus<>())); }
-
-#if (!defined(DUCC0_NO_SIMD)) && defined(__AVX__)
-template<> inline std::complex<float> hsum_cmplx<float>
-  (bounded_simd<float,8> vr, bounded_simd<float,8> vi)
-  {
-  static_assert(bounded_simd<float,8>::size()==8, "must not happen");
-  auto t1 = _mm256_hadd_ps(__m256(vr), __m256(vi));
-  auto t2 = _mm_hadd_ps(_mm256_extractf128_ps(t1, 0), _mm256_extractf128_ps(t1, 1));
-  t2 += _mm_shuffle_ps(t2, t2, _MM_SHUFFLE(1,0,3,2));
-  return std::complex<float>(t2[0], t2[1]);
-  }
-#elif (!defined(DUCC0_NO_SIMD)) && defined(__SSE3__)
-template<> inline std::complex<float> hsum_cmplx<float>
-  (bounded_simd<float,8> vr, bounded_simd<float,8> vi)
-  {
-  static_assert(bounded_simd<float,8>::size()==4, "must not happen");
-  auto t1 = _mm_hadd_ps(__m128(vr), __m128(vi));
-  t1 += _mm_shuffle_ps(t1, t1, _MM_SHUFFLE(2,3,0,1));
-  return std::complex<float>(t1[0], t1[2]);
-  }
-#endif
 
 }
 #endif
