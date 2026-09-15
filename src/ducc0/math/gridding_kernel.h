@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <complex>
 #include <functional>
 #include <vector>
 #include <memory>
@@ -32,6 +33,9 @@
 #include "ducc0/infra/useful_macros.h"
 #include "ducc0/infra/error_handling.h"
 #include "ducc0/infra/simd.h"
+#if (!defined(DUCC0_NO_SIMD)) && (!defined(DUCC0_HOMEGROWN_SIMD)) && (defined(__AVX__) || defined(__SSE3__))
+#include <immintrin.h>
+#endif
 #include "ducc0/infra/threading.h"
 #include "ducc0/math/gl_integrator.h"
 #include "ducc0/math/constants.h"
@@ -39,6 +43,36 @@
 namespace ducc0 {
 
 namespace detail_gridding_kernel {
+
+template<typename T> constexpr inline int hsum_simdlen
+  = std::min<int>(8, native_simd<T>::size());
+
+template<typename T> using hsum_simd = typename simd_select<T,hsum_simdlen<T>>::type;
+
+template<typename T> inline std::complex<T> hsum_cmplx
+  (hsum_simd<T> vr, hsum_simd<T> vi)
+  { return std::complex<T>(reduce(vr, std::plus<>()), reduce(vi, std::plus<>())); }
+
+#if (!defined(DUCC0_NO_SIMD)) && defined(__AVX__)
+template<> inline std::complex<float> hsum_cmplx<float>
+  (hsum_simd<float> vr, hsum_simd<float> vi)
+  {
+  static_assert(hsum_simd<float>::size()==8, "must not happen");
+  auto t1 = _mm256_hadd_ps(__m256(vr), __m256(vi));
+  auto t2 = _mm_hadd_ps(_mm256_extractf128_ps(t1, 0), _mm256_extractf128_ps(t1, 1));
+  t2 += _mm_shuffle_ps(t2, t2, _MM_SHUFFLE(1,0,3,2));
+  return std::complex<float>(t2[0], t2[1]);
+  }
+#elif (!defined(DUCC0_NO_SIMD)) && defined(__SSE3__)
+template<> inline std::complex<float> hsum_cmplx<float>
+  (hsum_simd<float> vr, hsum_simd<float> vi)
+  {
+  static_assert(hsum_simd<float>::size()==4, "must not happen");
+  auto t1 = _mm_hadd_ps(__m128(vr), __m128(vi));
+  t1 += _mm_shuffle_ps(t1, t1, _MM_SHUFFLE(2,3,0,1));
+  return std::complex<float>(t1[0], t1[2]);
+  }
+#endif
 
 using namespace std;
 
