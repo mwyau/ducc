@@ -252,7 +252,43 @@ class Ylmgen: public YlmBase
 using Tv=native_simd<double>;
 static constexpr size_t VLEN=Tv::size();
 
-#if ((!defined(DUCC0_NO_SIMD)) && defined(__AVX__) && (!defined(__AVX512F__)))
+#if ((!defined(DUCC0_NO_SIMD)) && defined(__AVX512F__) && defined(DUCC0_SHT_AVX512_REDUCTION_VARIANT))
+// CI selects one of the two candidates explicitly; the default remains generic
+// until an AVX-512-capable runner validates a candidate end to end.
+static_assert(Tv::size()==8, "must not happen");
+#if (DUCC0_SHT_AVX512_REDUCTION_VARIANT == 1)
+static inline void vhsum_cmplx_special (Tv a, Tv b, Tv c, Tv d,
+  complex<double> * DUCC0_RESTRICT cc)
+  {
+  cc[0] += complex<double>(_mm512_reduce_add_pd(__m512d(a)),
+                           _mm512_reduce_add_pd(__m512d(b)));
+  cc[1] += complex<double>(_mm512_reduce_add_pd(__m512d(c)),
+                           _mm512_reduce_add_pd(__m512d(d)));
+  }
+#elif (DUCC0_SHT_AVX512_REDUCTION_VARIANT == 2)
+static inline void vhsum_cmplx_special (Tv a, Tv b, Tv c, Tv d,
+  complex<double> * DUCC0_RESTRICT cc)
+  {
+  auto a256 = _mm256_add_pd(_mm512_castpd512_pd256(__m512d(a)),
+                            _mm512_extractf64x4_pd(__m512d(a), 1));
+  auto b256 = _mm256_add_pd(_mm512_castpd512_pd256(__m512d(b)),
+                            _mm512_extractf64x4_pd(__m512d(b), 1));
+  auto c256 = _mm256_add_pd(_mm512_castpd512_pd256(__m512d(c)),
+                            _mm512_extractf64x4_pd(__m512d(c), 1));
+  auto d256 = _mm256_add_pd(_mm512_castpd512_pd256(__m512d(d)),
+                            _mm512_extractf64x4_pd(__m512d(d), 1));
+  auto tmp1=_mm256_hadd_pd(a256,b256),
+       tmp2=_mm256_hadd_pd(c256,d256);
+  auto tmp3=_mm256_permute2f128_pd(tmp1,tmp2,49),
+       tmp4=_mm256_permute2f128_pd(tmp1,tmp2,32);
+  tmp1=tmp3+tmp4;
+  cc[0]+=complex<double>(tmp1[0], tmp1[1]);
+  cc[1]+=complex<double>(tmp1[2], tmp1[3]);
+  }
+#else
+#error "unknown DUCC_SHT_AVX512_REDUCTION_VARIANT"
+#endif
+#elif ((!defined(DUCC0_NO_SIMD)) && defined(__AVX__) && (!defined(__AVX512F__)))
 static_assert(Tv::size()==4, "must not happen");
 static inline void vhsum_cmplx_special (Tv a, Tv b, Tv c, Tv d,
   complex<double> * DUCC0_RESTRICT cc)

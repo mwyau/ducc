@@ -1,40 +1,43 @@
-name: ducc-tests
-on: [workflow_dispatch]
+name: ducc-simd-tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASELINE_SHA: d2f74d3803df568b0ce2df6e0094628b5aabe793
+
 jobs:
-  test-macos:
-    runs-on: macos-15
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-      - run: python -m pip install --user --upgrade pytest numpy scipy
-      - run: DUCC0_OPTIMIZATION=portable python -m pip install --user .
-      - run: python -m pytest python/test -x
-  test-windows:
+  windows-avx:
+    name: Windows 2025 / AVX
     runs-on: windows-2025
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
-      - run: python -m pip install --user --upgrade pytest numpy scipy
-      - run: python -m pip install --user .
-      - run: python -m pytest python/test -x
-  test-intel:
-    runs-on: ubuntu-24.04
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build, test, and benchmark AVX plus SSE3/SSE2 reduction paths
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File ci/run_windows_simd.ps1 -Isa avx
+
+  windows-avx512:
+    name: Windows 2025 / AVX-512
+    runs-on: windows-2025
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
-      - run: python -m pip install --user --upgrade pytest scipy
-      - run: wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
-      - run: sudo apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
-      - run: sudo add-apt-repository "deb https://apt.repos.intel.com/oneapi all main"
-      - run: sudo apt update
-      - run: sudo apt install intel-oneapi-compiler-dpcpp-cpp
-      - run: |
-          source /opt/intel/oneapi/setvars.sh intel64
-          CC=icx CXX=icpx python3 -m pip install --user .
-          python -m pytest python/test -x
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build, test, and benchmark both AVX-512 SHT reductions
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File ci/run_windows_simd.ps1 -Isa avx512
