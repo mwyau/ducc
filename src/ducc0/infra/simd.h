@@ -170,7 +170,7 @@ template<typename Tsimd> inline void unaligned_add(typename Tsimd::value_type *p
 #define DUCC0_HOMEGROWN_SIMD
 
 #if defined(__SSE2__)  // we are on an x86 platform and we have vector types
-#include <x86intrin.h>
+#include <immintrin.h>
 #endif
 
 #if defined(__aarch64__)  // let's check for SVE and Neon
@@ -884,4 +884,11 @@ template<typename Tsimd> inline void unaligned_add(typename Tsimd::value_type *p
   { storeu(loadu<Tsimd>(ptr)+v, ptr); }
 }
 #endif
+
+namespace ducc0 {
+
+template<typename T, size_t N> using bounded_simd = typename simd_select<T,
+  std::min<size_t>(N, native_simd<T>::size())>::type;
+
+}
 #endif
