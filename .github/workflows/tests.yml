@@ -1,6 +1,58 @@
 name: ducc-tests
 on: [workflow_dispatch]
 jobs:
+  test-linux-dispatch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --user --upgrade pytest numpy scipy
+      - name: Build dispatch package and selector test
+        run: |
+          CMAKE_ARGS="-DDUCC0_CPU_DISPATCH=ON -DDUCC0_BUILD_DISPATCH_TESTS=ON" \
+            python -m pip install --user .
+      - name: Verify dispatch mode
+        run: |
+          python - <<'PY'
+          import ducc0
+          info = ducc0.misc.cpu_dispatch_info()
+          print(info)
+          assert info["mode"] == "dispatch"
+          PY
+      - name: Run C++ dispatch tests
+        run: |
+          ctest_file="$(find build -type f -name CTestTestfile.cmake -print -quit)"
+          test -n "$ctest_file"
+          ctest --test-dir "$(dirname "$ctest_file")" --output-on-failure
+      - run: python -m pytest python/test -x
+
+  test-windows-dispatch:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --user --upgrade pytest numpy scipy
+      - name: Build dispatch package and selector test
+        shell: pwsh
+        run: |
+          $env:CMAKE_ARGS = "-DDUCC0_CPU_DISPATCH=ON -DDUCC0_BUILD_DISPATCH_TESTS=ON"
+          python -m pip install --user .
+      - name: Verify dispatch mode
+        shell: pwsh
+        run: |
+          python -c "import ducc0; info=ducc0.misc.cpu_dispatch_info(); print(info); assert info['mode'] == 'dispatch'"
+      - name: Run C++ dispatch tests
+        shell: pwsh
+        run: |
+          $ctestFile = Get-ChildItem -Path build -Filter CTestTestfile.cmake -Recurse | Select-Object -First 1
+          if ($null -eq $ctestFile) { throw "CTestTestfile.cmake was not generated" }
+          ctest --test-dir $ctestFile.DirectoryName --output-on-failure
+      - run: python -m pytest python/test -x
+
   test-macos:
     runs-on: macos-15
     steps:

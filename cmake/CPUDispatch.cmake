@@ -285,3 +285,35 @@ function(ducc0_attach_cpu_dispatch _ducc0_parent_target)
             ${DUCC0_CPU_DISPATCH_AVX512_FLAGS})
     endif()
 endfunction()
+
+function(ducc0_add_cpu_dispatch_tests)
+    if(NOT DUCC0_BUILD_DISPATCH_TESTS)
+        return()
+    endif()
+
+    add_executable(ducc0_cpu_dispatch_test
+        "${CMAKE_SOURCE_DIR}/tests/cpu_dispatch_test.cc"
+        "${CMAKE_SOURCE_DIR}/src/ducc0/infra/cpu_dispatch.cc")
+    target_include_directories(ducc0_cpu_dispatch_test PRIVATE
+        "${CMAKE_SOURCE_DIR}/src")
+    target_compile_features(ducc0_cpu_dispatch_test PRIVATE cxx_std_17)
+    if(DUCC0_CPU_DISPATCH_ACTIVE)
+        target_compile_definitions(ducc0_cpu_dispatch_test PRIVATE
+            DUCC0_CPU_DISPATCH=1)
+        if(DUCC0_CPU_DISPATCH_COMPILER_HAS_AVX)
+            target_compile_definitions(ducc0_cpu_dispatch_test PRIVATE
+                DUCC0_DISPATCH_HAS_AVX=1)
+        endif()
+        if(DUCC0_CPU_DISPATCH_COMPILER_HAS_AVX512)
+            target_compile_definitions(ducc0_cpu_dispatch_test PRIVATE
+                DUCC0_DISPATCH_HAS_AVX512=1)
+        endif()
+    endif()
+    # Keep assert() enabled in Release configurations as well.
+    if(MSVC)
+        target_compile_options(ducc0_cpu_dispatch_test PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(ducc0_cpu_dispatch_test PRIVATE -UNDEBUG)
+    endif()
+    add_test(NAME ducc0_cpu_dispatch_test COMMAND ducc0_cpu_dispatch_test)
+endfunction()

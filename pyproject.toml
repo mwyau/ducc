@@ -131,17 +131,20 @@ sdist.include = [
     "python/test/test_fft.py",
     "python/test/test_healpix.py",
     "python/test/test_misc.py",
+    "python/test/test_cpu_dispatch.py",
     "python/test/test_pointing.py",
     "python/test/test_sht.py",
     "python/test/test_totalconvolve.py",
     "python/test/test_wgridder.py",
     "python/test/test_nufft.py",
+    "tests/cpu_dispatch_test.cc",
     "python/demos/fft_bench.py",
     "python/demos/fft_stress.py",
     "python/demos/healpix_perftest.py",
     "python/demos/totalconvolve_demo.py",
     "python/demos/totalconvolve_usage.py",
     "python/demos/sht_analysis_demo.py",
+    "python/demos/sht_dispatch_bench.py",
     "python/demos/nufft_benchmark.py"
 ]
 

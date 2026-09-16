@@ -159,3 +159,7 @@ else()
 endif()
 
 install(TARGETS ducc0 LIBRARY DESTINATION .)
+if(DUCC0_BUILD_DISPATCH_TESTS)
+    enable_testing()
+    ducc0_add_cpu_dispatch_tests()
+endif()
