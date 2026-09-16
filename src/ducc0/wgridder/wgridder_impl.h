@@ -55,7 +55,12 @@ namespace detail_gridder {
 
 using namespace std;
 
-template<typename T> using mysimd = bounded_simd<T,8>;
+template<typename T> constexpr inline int mysimdlen
+  = min<int>(8, native_simd<T>::size());
+
+template<typename T> using mysimd = typename simd_select<T,mysimdlen<T>>::type;
+
+using detail_gridding_kernel::hsum_cmplx;
 
 template<typename T> T sqr(T val) { return val*val; }
 

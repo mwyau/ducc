@@ -8,8 +8,36 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+      - name: Report runner information
+        shell: bash
+        run: |
+          set -euo pipefail
+          uname -a
+          machine="$(sysctl -n hw.machine)"
+          model="$(sysctl -n hw.model)"
+          ncpu="$(sysctl -n hw.ncpu)"
+          memsize="$(sysctl -n hw.memsize)"
+          echo "hw.model: $model"
+          echo "hw.machine: $machine"
+          echo "hw.ncpu: $ncpu"
+          echo "hw.memsize: $memsize"
+          mem_gib="$(awk -v bytes="$memsize" 'BEGIN {printf "%.1f GiB", bytes/1024/1024/1024}')"
+          probe="$RUNNER_TEMP/CPUCapabilities"
+          c++ -std=c++17 -O0 cmake/CPUCapabilities.cpp -o "$probe"
+          capabilities="$($probe)"
+          echo "$capabilities"
+          {
+            echo "### Runner information"
+            echo "- OS: $(uname -srm)"
+            echo "- Architecture: $machine"
+            echo "- CPU model: $model"
+            echo "- Logical cores: $ncpu"
+            echo "- RAM: $mem_gib"
+            echo "- CPUCapabilities: $capabilities"
+          } >> "$GITHUB_STEP_SUMMARY"
       - run: python -m pip install --user --upgrade pytest numpy scipy
       - run: DUCC0_OPTIMIZATION=portable python -m pip install --user .
+      - run: python -c "import ducc0; print(ducc0.__file__)"
       - run: python -m pytest python/test -x
   test-windows:
     runs-on: windows-2025
@@ -18,8 +46,44 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Report runner information
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $processors = @(Get-CimInstance Win32_Processor)
+          $computer = Get-CimInstance Win32_ComputerSystem
+          $operatingSystem = Get-CimInstance Win32_OperatingSystem
+          $processors | Format-List Name,Manufacturer,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed
+          $computer | Format-List Manufacturer,Model,TotalPhysicalMemory
+          $operatingSystem | Format-List Caption,Version,OSArchitecture
+          [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+          [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
+          $probe = Join-Path $env:RUNNER_TEMP 'CPUCapabilities.exe'
+          $object = Join-Path $env:RUNNER_TEMP 'CPUCapabilities.obj'
+          cl /nologo /EHsc /std:c++17 "/Fo:$object" "/Fe:$probe" cmake/CPUCapabilities.cpp
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $capabilities = ((& $probe) -join ' ').Trim()
+          $probeExitCode = $LASTEXITCODE
+          if ($probeExitCode -ne 0) { exit $probeExitCode }
+          Write-Host $capabilities
+          $logicalCores = ($processors | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
+          $ramBytes = [uint64]$computer.TotalPhysicalMemory
+          $ramGiB = [math]::Round($ramBytes / 1GB, 1)
+          $osArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+          $processArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
+          @(
+            '### Runner information'
+            "- OS: $($operatingSystem.Caption) $($operatingSystem.Version)"
+            "- Architecture: $processArchitecture (OS: $osArchitecture)"
+            "- CPU model: $($processors[0].Name)"
+            "- Logical cores: $logicalCores"
+            "- RAM: $ramGiB GiB ($ramBytes bytes)"
+            "- CPUCapabilities: $capabilities"
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
       - run: python -m pip install --user --upgrade pytest numpy scipy
       - run: python -m pip install --user .
+      - run: python -c "import ducc0; print(ducc0.__file__)"
       - run: python -m pytest python/test -x
   test-intel:
     runs-on: ubuntu-24.04
@@ -28,6 +92,30 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+      - name: Report runner information
+        shell: bash
+        run: |
+          set -euo pipefail
+          uname -a
+          lscpu
+          free -h
+          architecture="$(uname -m)"
+          cpu_model="$(lscpu | awk -F: '$1 == "Model name" {sub(/^[[:space:]]*/, "", $2); print $2; exit}')"
+          logical_cores="$(nproc)"
+          ram="$(free -h | awk '/^Mem:/ {print $2; exit}')"
+          probe="$RUNNER_TEMP/CPUCapabilities"
+          c++ -std=c++17 -O0 cmake/CPUCapabilities.cpp -o "$probe"
+          capabilities="$($probe)"
+          echo "$capabilities"
+          {
+            echo "### Runner information"
+            echo "- OS: $(uname -srm)"
+            echo "- Architecture: $architecture"
+            echo "- CPU model: $cpu_model"
+            echo "- Logical cores: $logical_cores"
+            echo "- RAM: $ram"
+            echo "- CPUCapabilities: $capabilities"
+          } >> "$GITHUB_STEP_SUMMARY"
       - run: python -m pip install --user --upgrade pytest scipy
       - run: wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
       - run: sudo apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
@@ -37,4 +125,101 @@ jobs:
       - run: |
           source /opt/intel/oneapi/setvars.sh intel64
           CC=icx CXX=icpx python3 -m pip install --user .
-          python -m pytest python/test -x
+          python3 -c "import ducc0; print(ducc0.__file__)"
+          python3 -m pytest python/test -x
+
+  test-windows-avx512:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Probe runner CPU capabilities
+        id: cpu_probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $processors = @(Get-CimInstance Win32_Processor)
+          $computer = Get-CimInstance Win32_ComputerSystem
+          $operatingSystem = Get-CimInstance Win32_OperatingSystem
+          $processors | Format-List Name,Manufacturer,NumberOfCores,NumberOfLogicalProcessors,MaxClockSpeed
+          $computer | Format-List Manufacturer,Model,TotalPhysicalMemory
+          $operatingSystem | Format-List Caption,Version,OSArchitecture
+          [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+          [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
+          $probe = Join-Path $env:RUNNER_TEMP 'CPUCapabilities.exe'
+          $object = Join-Path $env:RUNNER_TEMP 'CPUCapabilities.obj'
+          cl /nologo /EHsc /std:c++17 "/Fo:$object" "/Fe:$probe" cmake/CPUCapabilities.cpp
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $capabilities = ((& $probe) -join ' ').Trim()
+          $probeExitCode = $LASTEXITCODE
+          if ($probeExitCode -ne 0) { exit $probeExitCode }
+          Write-Host $capabilities
+          if ($capabilities -notmatch '(^|\s)avx512_usable=[01](\s|$)') {
+            throw 'CPUCapabilities output did not contain a valid avx512_usable result.'
+          }
+          $avx512Usable = $capabilities -match '(^|\s)avx512_usable=1(\s|$)'
+          "avx512_usable=$($avx512Usable.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          $logicalCores = ($processors | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
+          $ramBytes = [uint64]$computer.TotalPhysicalMemory
+          $ramGiB = [math]::Round($ramBytes / 1GB, 1)
+          $osArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+          $processArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture
+          @(
+            '### Runner information'
+            "- OS: $($operatingSystem.Caption) $($operatingSystem.Version)"
+            "- Architecture: $processArchitecture (OS: $osArchitecture)"
+            "- CPU model: $($processors[0].Name)"
+            "- Logical cores: $logicalCores"
+            "- RAM: $ramGiB GiB ($ramBytes bytes)"
+            "- CPUCapabilities: $capabilities"
+            "- AVX-512-specific execution gate: $($avx512Usable.ToString().ToLowerInvariant())"
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+      - name: Record unavailable AVX-512 coverage
+        if: steps.cpu_probe.outputs.avx512_usable != 'true'
+        shell: pwsh
+        run: |
+          $message = 'AVX-512 execution unavailable on this runner.'
+          $detail = 'The AVX-512-specific NUFFT/wgridder tests were not executed.'
+          Write-Host $message
+          Write-Host $detail
+          @(
+            '### AVX-512 validation'
+            $message
+            $detail
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+      - name: Install AVX-512 test dependencies
+        if: steps.cpu_probe.outputs.avx512_usable == 'true'
+        shell: pwsh
+        run: python -m pip install --user --upgrade pytest numpy scipy
+      - name: Build DUCC for AVX-512
+        if: steps.cpu_probe.outputs.avx512_usable == 'true'
+        shell: pwsh
+        env:
+          DUCC0_OPTIMIZATION: native-strip
+          CMAKE_BUILD_PARALLEL_LEVEL: '1'
+        run: |
+          $buildLog = Join-Path $env:RUNNER_TEMP 'ducc-avx512-build.log'
+          python -m pip install --user -v . --config-settings=build.verbose=true --config-settings=cmake.define.DUCC0_ARCH_FLAGS=/arch:AVX512 *> $buildLog
+          $buildExitCode = $LASTEXITCODE
+          Get-Content $buildLog
+          if ($buildExitCode -ne 0) { exit $buildExitCode }
+          $compileFlag = Select-String -Path $buildLog -Pattern '(?i)(cl(\.exe)?|clang-cl).*\/arch:AVX512'
+          if (-not $compileFlag) {
+            throw 'The verbose build log did not show /arch:AVX512 on a compiler invocation.'
+          }
+      - name: Verify AVX-512 extension import
+        if: steps.cpu_probe.outputs.avx512_usable == 'true'
+        shell: pwsh
+        run: python -c "import ducc0; print(ducc0.__file__)"
+      - name: Run focused AVX-512 tests
+        if: steps.cpu_probe.outputs.avx512_usable == 'true'
+        shell: pwsh
+        run: python -m pytest python/test/test_nufft.py python/test/test_wgridder.py -x
+      - name: Record AVX-512 validation result
+        if: success() && steps.cpu_probe.outputs.avx512_usable == 'true'
+        shell: pwsh
+        run: |
+          'AVX-512-specific NUFFT/wgridder tests were executed and passed.' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

@@ -36,7 +36,10 @@ using namespace std;
 // larger than 8; length-16 SIMD types (like full AVX512 float32 vectors) would
 // be overkill for typical kernel supports (we don't let float32 kernels have
 // a support larger than 8 anyway).
-template<typename T> using mysimd = bounded_simd<T,8>;
+template<typename T> constexpr inline int good_simdlen
+  = min<int>(8, native_simd<T>::size());
+
+template<typename T> using mysimd = typename simd_select<T,good_simdlen<T>>::type;
 
 /// Function for quickly zeroing a 2D array with arbitrary strides.
 template<typename T> void quickzero(const vmav<T,2> &arr, size_t nthreads)

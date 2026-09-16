@@ -884,11 +884,4 @@ template<typename Tsimd> inline void unaligned_add(typename Tsimd::value_type *p
   { storeu(loadu<Tsimd>(ptr)+v, ptr); }
 }
 #endif
-
-namespace ducc0 {
-
-template<typename T, size_t N> using bounded_simd = typename simd_select<T,
-  std::min<size_t>(N, native_simd<T>::size())>::type;
-
-}
 #endif

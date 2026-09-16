@@ -33,6 +33,7 @@ namespace ducc0 {
 namespace detail_nufft {
 
 using namespace std;
+using detail_gridding_kernel::hsum_cmplx;
 
 template<typename Tacc, size_t ndim> constexpr inline int log2tile_=-1;
 template<> constexpr inline int log2tile_<double, 1> = 10;
