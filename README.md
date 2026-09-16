@@ -70,6 +70,20 @@ much quicker and does not require any compilers to be installed on the system.
 However, the code will most likely perform significantly worse (by a factor of
 two to three for some functions) than a custom built version.
 
+For a portable x86-64 build that selects the highest supported compiled SHT
+SIMD target usable by the current CPU and operating system, enable the dispatch
+build explicitly:
+
+    CMAKE_ARGS="-DDUCC0_CPU_DISPATCH=ON" pip3 install .
+
+The runtime choice can be inspected with `ducc0.misc.cpu_dispatch_info()` and
+temporarily capped for diagnostics and testing with
+`DUCC0_CPU_MAX=sse2`, `avx`, or `avx512`. The variable is an upper cap: it does
+not request execution of an unsupported target and is not intended as a general
+performance-tuning interface. The dispatched SHT targets are SSE2, AVX, and
+AVX512 when the compiler supports them. FFT,
+NUFFT, and wgridder remain compile-time single-copy targets for now.
+
 Additionally, pre-compiled binaries are distributed for the following systems:
 
 <a href="https://repology.org/project/python:ducc0/versions">

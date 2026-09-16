@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.15...3.27)
 project(${SKBUILD_PROJECT_NAME} LANGUAGES CXX)
 
+option(DUCC0_CPU_DISPATCH
+    "Build isolated x86-64 SHT runtime SIMD targets"
+    OFF)
+
+include(cmake/CPUDispatch.cmake)
+ducc0_configure_cpu_dispatch()
+
 if(DEFINED ENV{DUCC0_OPTIMIZATION})
     set (OPTFLAGS "$ENV{DUCC0_OPTIMIZATION}")
 else()
@@ -21,8 +28,13 @@ set(CXX_SOURCES
     src/ducc0/math/wigner3j.cc src/ducc0/math/space_filling.cc
     src/ducc0/wgridder/wgridder_inst1.cc
     src/ducc0/wgridder/wgridder_inst2.cc src/ducc0/wgridder/wgridder_inst3.cc
+    src/ducc0/infra/cpu_dispatch.cc
     src/ducc0/infra/string_utils.cc
     src/ducc0/infra/threading.cc src/ducc0/infra/mav.cc src/ducc0/sht/sht.cc)
+
+if(DUCC0_CPU_DISPATCH_ACTIVE)
+    list(APPEND CXX_SOURCES src/ducc0/sht/sht_dispatch.cc)
+endif()
 set(PYMOD_SOURCES
     python/nufft_pymod.cc python/fft_pymod.cc python/sht_pymod.cc
     python/misc_pymod.cc python/totalconvolve_pymod.cc python/wgridder_pymod.cc
@@ -45,7 +57,10 @@ endif()
 
 set (DEFS ${DEFS} PKGVERSION=${PKGVERSION})
 
-if (NOT MSVC)
+string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _ducc0_top_processor)
+string(TOLOWER "${CMAKE_GENERATOR_PLATFORM}" _ducc0_top_generator_platform)
+
+if (NOT DUCC0_CPU_DISPATCH_ACTIVE AND NOT MSVC)
     if (CMAKE_SYSTEM_PROCESSOR MATCHES "ppc|ppc64|powerpc|powerpc64" OR (APPLE AND CMAKE_OSX_ARCHITECTURES MATCHES "ppc|ppc64"))
         # PowerPC arch does not have -march flag.
         set(DUCC0_ARCH_FLAGS "-mtune=native" CACHE STRING "Compiler flags for specifying target architecture.")
@@ -55,7 +70,9 @@ if (NOT MSVC)
         set(DUCC0_ARCH_FLAGS "-march=native" CACHE STRING "Compiler flags for specifying target architecture.")
     endif ()
     message(STATUS "Using GCC/Clang flags: ${DUCC0_ARCH_FLAGS}")
-else ()
+elseif (NOT DUCC0_CPU_DISPATCH_ACTIVE AND NOT DUCC0_CPU_DISPATCH AND
+        _ducc0_top_processor MATCHES "^(x86|x86_64|amd64|x64|i[3-6]86)$" AND
+        NOT _ducc0_top_generator_platform MATCHES "^(arm|arm64|arm64ec)$")
     # Check for AVX, AVX512 and SSE support
     message(STATUS "Checking for AVX, AVX512 and SSE support")
     try_run(RUN_RESULT_VAR COMPILE_RESULT_VAR
@@ -74,6 +91,12 @@ else ()
     endif ()
     message(STATUS "CPU supports: ${RUN_OUTPUT}")
     message(STATUS "Using MSVC flags: ${DUCC0_ARCH_FLAGS}")
+elseif (NOT DUCC0_CPU_DISPATCH_ACTIVE AND MSVC)
+    # Dispatch is intentionally inactive on unsupported MSVC architectures.
+    # Use compiler defaults and never run the x86-only CheckAVX probe there.
+    set(DUCC0_ARCH_FLAGS "" CACHE STRING
+        "Compiler flags for specifying target architecture." FORCE)
+    message(STATUS "CPU dispatch inactive; using default MSVC architecture flags")
 endif ()
 
 include_directories(${CMAKE_SOURCE_DIR}/src)
@@ -93,7 +116,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
 endif()
 SET (COMP_OPTS ${COMP_OPTS} ${DUCC0_WARN_FLAGS})
 
-if (OPTFLAGS MATCHES "^native")
+if (OPTFLAGS MATCHES "^native" AND NOT DUCC0_CPU_DISPATCH_ACTIVE)
     SET (COMP_OPTS ${COMP_OPTS} ${DUCC0_ARCH_FLAGS})
 endif()
 if (OPTFLAGS MATCHES "-debug$")
@@ -129,6 +152,10 @@ target_link_options(ducc0 PRIVATE ${LINK_OPTS})
 target_link_libraries(ducc0 PRIVATE Threads::Threads)
 target_compile_features(ducc0 PRIVATE cxx_std_17)
 
-set_property(TARGET ducc0 PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+if(DUCC0_CPU_DISPATCH_ACTIVE)
+    ducc0_attach_cpu_dispatch(ducc0)
+else()
+    set_property(TARGET ducc0 PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+endif()
 
 install(TARGETS ducc0 LIBRARY DESTINATION .)

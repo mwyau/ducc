@@ -24,6 +24,7 @@
 #include <vector>
 #include <cmath>
 #include <cstring>
+#include <type_traits>
 #include "ducc0/infra/simd.h"
 #include "ducc0/sht/sht.h"
 #include "ducc0/sht/sphere_interpol.h"
@@ -36,12 +37,45 @@
 #include "ducc0/sht/sht_utils.h"
 #include "ducc0/infra/timers.h"
 #include "ducc0/sht/sht_inner_loop.h"
+#ifdef DUCC0_CPU_DISPATCH
+#include "ducc0/sht/sht_dispatch.h"
+#endif
 
 namespace ducc0 {
 
 namespace detail_sht {
 
 using namespace std;
+
+template<typename T> inline void run_inner_loop_a2m(SHT_mode mode,
+  const vmav<complex<double>,2> &almtmp,
+  const vmav<complex<T>,3> &phase, const vector<ringdata> &rdata,
+  Ylmgen &gen, size_t mi)
+  {
+#ifdef DUCC0_CPU_DISPATCH
+  if constexpr (is_same<T,float>::value)
+    sht_kernels().a2m_float(mode, almtmp, phase, rdata, gen, mi);
+  else
+    sht_kernels().a2m_double(mode, almtmp, phase, rdata, gen, mi);
+#else
+  inner_loop_a2m(mode, almtmp, phase, rdata, gen, mi);
+#endif
+  }
+
+template<typename T> inline void run_inner_loop_m2a(SHT_mode mode,
+  const vmav<complex<double>,2> &almtmp,
+  const cmav<complex<T>,3> &phase, const vector<ringdata> &rdata,
+  Ylmgen &gen, size_t mi)
+  {
+#ifdef DUCC0_CPU_DISPATCH
+  if constexpr (is_same<T,float>::value)
+    sht_kernels().m2a_float(mode, almtmp, phase, rdata, gen, mi);
+  else
+    sht_kernels().m2a_double(mode, almtmp, phase, rdata, gen, mi);
+#else
+  inner_loop_m2a(mode, almtmp, phase, rdata, gen, mi);
+#endif
+  }
 
 struct ringhelper
   {
@@ -713,8 +747,8 @@ template<typename T> void alm2leg(  // associated Legendre transform
             almtmp(ialm,l) *= norm_l[l];
           }
         gen.prepare(m);
-        inner_loop_a2m (mode, almtmp0, leg0, rdata, gen, mi);
-        inner_loop_a2m (mode, almtmp1, leg1, rdata, gen, mi);
+        run_inner_loop_a2m (mode, almtmp0, leg0, rdata, gen, mi);
+        run_inner_loop_a2m (mode, almtmp1, leg1, rdata, gen, mi);
         }
       }); /* end of parallel region */
     }
@@ -744,7 +778,7 @@ template<typename T> void alm2leg(  // associated Legendre transform
           almtmp(lmax+1,ialm) = 0;
           }
         gen.prepare(m);
-        inner_loop_a2m (mode, almtmp, leg, rdata, gen, mi);
+        run_inner_loop_a2m (mode, almtmp, leg, rdata, gen, mi);
         }
       }); /* end of parallel region */
     }
@@ -892,8 +926,8 @@ template<typename T> void leg2alm_internal(  // associated Legendre transform
         for (size_t ialm=0; ialm<nalm; ++ialm)
           for (size_t l=m; l<almtmp.shape(1); ++l)
             almtmp(ialm,l) = 0.;
-        inner_loop_m2a (mode, almtmp0, leg0, rdata, gen, mi);
-        inner_loop_m2a (mode, almtmp1, leg1, rdata, gen, mi);
+        run_inner_loop_m2a (mode, almtmp0, leg0, rdata, gen, mi);
+        run_inner_loop_m2a (mode, almtmp1, leg1, rdata, gen, mi);
         for (size_t ialm=0; ialm<nalm; ++ialm)
           for (size_t l=m; l<=lmax+spin; ++l)
             almtmp(ialm,l) *= norm_l[l];
@@ -931,7 +965,7 @@ template<typename T> void leg2alm_internal(  // associated Legendre transform
         for (size_t l=m; l<almtmp.shape(0); ++l)
           for (size_t ialm=0; ialm<nalm; ++ialm)
             almtmp(l,ialm) = 0.;
-        inner_loop_m2a (mode, almtmp, leg, rdata, gen, mi);
+        run_inner_loop_m2a (mode, almtmp, leg, rdata, gen, mi);
         auto lmin=max(spin,m);
         if (rdata_fast.empty())
           {

@@ -29,6 +29,7 @@
 #include "ducc0/bindings/pybind_utils.h"
 #include "ducc0/../../python/module_adders.h"
 #include "ducc0/infra/mav.h"
+#include "ducc0/infra/cpu_dispatch.h"
 #include "ducc0/infra/misc_utils.h"
 #include "ducc0/math/constants.h"
 #include "ducc0/math/gl_integrator.h"
@@ -41,6 +42,10 @@
 #include <vector>
 #include <cmath>
 #include <complex>
+
+#ifdef DUCC0_CPU_DISPATCH
+#include "ducc0/sht/sht_dispatch.h"
+#endif
 
 
 namespace ducc0 {
@@ -1905,9 +1910,57 @@ static py::tuple native_vector_lengths()
 const char *native_vector_lengths_DS = R"""(
 Returns the vector lengths for float32 and float64 supported by this ducc library.
 
+In a runtime-dispatch build these are the lengths of the neutral compile-time
+module code. Use cpu_dispatch_info() to inspect the selected SHT target.
+
 Returns
 -------
 tuple(int) : supported vector lengths for float32 and float64, respectively
+)""";
+
+static py::dict cpu_dispatch_info()
+  {
+  const auto &state = cpu_dispatch::runtime_state();
+  py::dict result;
+  py::list compiled_names;
+  py::list usable;
+  result["mode"] = cpu_dispatch::mode_name();
+  result["x86"] = state.targets.x86;
+
+  size_t ncompiled = 0;
+  const auto *compiled = cpu_dispatch::compiled_targets(ncompiled);
+  for (size_t i=0; i<ncompiled; ++i)
+    compiled_names.append(compiled[i].name);
+  result["compiled"] = compiled_names;
+
+  if (cpu_dispatch::target_is_usable(cpu_dispatch::TargetId::sse2,
+      state.targets))
+    usable.append("sse2");
+  if (cpu_dispatch::target_is_usable(cpu_dispatch::TargetId::avx,
+      state.targets))
+    usable.append("avx");
+  if (cpu_dispatch::target_is_usable(cpu_dispatch::TargetId::avx512,
+      state.targets))
+    usable.append("avx512");
+  result["usable"] = usable;
+  result["max"] = cpu_dispatch::cpu_max_name(state.max_target);
+
+  py::dict selected;
+#ifdef DUCC0_CPU_DISPATCH
+  selected["sht.inner"] = detail_sht::selected_sht_target();
+#else
+  selected["sht.inner"] = "compile-time";
+#endif
+  result["selected"] = selected;
+  return result;
+  }
+
+const char *cpu_dispatch_info_DS = R"""(
+Returns read-only runtime CPU-dispatch diagnostics.
+
+The result reports the compiled and safely usable SHT target levels, the
+``DUCC0_CPU_MAX`` cap, and the selected SHT inner-loop target. Runtime
+selection is process-static; this function does not mutate it.
 )""";
 
 constexpr const char *misc_DS = R"""(
@@ -1997,6 +2050,7 @@ void add_misc(py::module_ &msup)
 
   m.def("print_diagnostics", print_diagnostics, print_diagnostics_DS);
   m.def("native_vector_lengths", native_vector_lengths, native_vector_lengths_DS);
+  m.def("cpu_dispatch_info", cpu_dispatch_info, cpu_dispatch_info_DS);
   }
 
 }
