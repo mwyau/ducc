@@ -41,6 +41,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "ducc0/../../python/module_adders.h"
 #include "ducc0/fft/fft.h"
 #include <complex>
+#include <cstdint>
+#include <cstdlib>
+#include <limits>
 
 namespace ducc0 {
 
@@ -52,13 +55,11 @@ namespace {
 
 using shape_t = ducc0::fmav_info::shape_t;
 
-#ifdef DUCC0_USE_NANOBIND
-using ldbl_t = double;
-#else
-// Only instantiate long double transforms if they offer more precision
-using ldbl_t = typename conditional<
-  sizeof(long double)==sizeof(double), double, long double>::type;
-#endif
+// Only instantiate a separate type when native long double has more precision.
+constexpr bool has_extended_longdouble =
+  numeric_limits<long double>::digits>numeric_limits<double>::digits;
+using ldbl_t = typename conditional<has_extended_longdouble,
+  long double, double>::type;
 
 using c64 = complex<float>;
 using c128 = complex<double>;
@@ -92,6 +93,16 @@ static shape_t makeaxes(const CNpArr &in, const OptAxes &axes)
   return shape_t(tmp.begin(), tmp.end());
   }
 
+#ifdef DUCC0_USE_NANOBIND
+// Public dispatch deliberately recognizes only ordinary dtypes; the private
+// long-double markers are accepted only by the validated buffer fallbacks.
+#define DISPATCH(arr, T1, T2, T3, func, args) \
+  { \
+  if (isPyarr<T1>(arr)) return func<double> args; \
+  if (isPyarr<T2>(arr)) return func<float> args; \
+  throw runtime_error("unsupported data type"); \
+  }
+#else
 #define DISPATCH(arr, T1, T2, T3, func, args) \
   { \
   if (isPyarr<T1>(arr)) return func<double> args; \
@@ -99,12 +110,20 @@ static shape_t makeaxes(const CNpArr &in, const OptAxes &axes)
   if (isPyarr<T3>(arr)) return func<ldbl_t> args; \
   throw runtime_error("unsupported data type"); \
   }
+#endif
 
 template<typename T> static T norm_fct(int inorm, size_t N)
   {
+#ifdef DUCC0_USE_NANOBIND
+  // Keep the ordinary float/double dispatch on double normalization arithmetic.
+  using norm_t = typename conditional<is_same<T,ldbl_t>::value,
+    ldbl_t, double>::type;
+#else
+  using norm_t = ldbl_t;
+#endif
   if (inorm==0) return T(1);
-  if (inorm==2) return T(1/ldbl_t(N));
-  if (inorm==1) return T(1/sqrt(ldbl_t(N)));
+  if (inorm==2) return T(1/norm_t(N));
+  if (inorm==1) return T(1/sqrt(norm_t(N)));
   throw invalid_argument("invalid value for inorm (must be 0, 1, or 2)");
   }
 
@@ -161,7 +180,11 @@ template<typename T> static NpArr c2c_sym_internal(const CNpArr &in,
 NpArr c2c(const CNpArr &a, const OptAxes &axes_, bool forward,
   int inorm, const OptNpArr &out_, size_t nthreads)
   {
+#ifdef DUCC0_USE_NANOBIND
+  if (isPyarr<c64>(a)||isPyarr<c128>(a))
+#else
   if (isPyarr<c64>(a)||isPyarr<c128>(a)||isPyarr<clong>(a))
+#endif
     DISPATCH(a, c128, c64, clong, c2c_internal, (a, axes_, forward,
              inorm, out_, nthreads))
 
@@ -457,13 +480,267 @@ template<typename T> static NpArr convolve_axis_internal_c(const CNpArr &in_,
 NpArr convolve_axis(const CNpArr &in, NpArr &out, size_t axis,
   const CNpArr &kernel, size_t nthreads)
   {
+#ifdef DUCC0_USE_NANOBIND
+  if (isPyarr<c64>(in)||isPyarr<c128>(in))
+#else
   if (isPyarr<c64>(in)||isPyarr<c128>(in)||isPyarr<clong>(in))
+#endif
     DISPATCH(in, c128, c64, clong, convolve_axis_internal_c, (in, out, axis,
       kernel, nthreads))
   else
     DISPATCH(in, f64, f32, flong, convolve_axis_internal, (in, out, axis,
       kernel, nthreads))
   }
+
+#ifdef DUCC0_USE_NANOBIND
+// Keep the long-double bridge and its registration code away from the regular
+// FFT text path; ELF linkers otherwise place .text.unlikely before .text.
+#if defined(__GNUC__) && !defined(__clang__) && defined(__ELF__)
+#define DUCC0_FFT_COLD [[gnu::cold, gnu::section(".text.ducc0_cold"), gnu::optimize("Os")]]
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define DUCC0_FFT_COLD [[gnu::cold, gnu::section(".text.ducc0_cold")]]
+#elif defined(__GNUC__) || defined(__clang__)
+#define DUCC0_FFT_COLD [[gnu::cold]]
+#else
+#define DUCC0_FFT_COLD
+#endif
+enum class native_ld_kind { any, real, complex };
+
+struct native_ld_pin
+  {
+  Py_buffer view{};
+  native_ld_pin(py::handle source, bool writable)
+    {
+    int flags=PyBUF_FORMAT | PyBUF_STRIDES | (writable ? PyBUF_WRITABLE : 0);
+    if (PyObject_GetBuffer(source.ptr(), &view, flags)<0)
+      throw py::python_error();
+    }
+  ~native_ld_pin() { PyBuffer_Release(&view); }
+  native_ld_pin(const native_ld_pin &)=delete;
+  native_ld_pin &operator=(const native_ld_pin &)=delete;
+  };
+
+DUCC0_FFT_COLD static NpArr make_native_ld_array_view(py::handle source, const Py_buffer &view,
+  native_ld_kind expected)
+  {
+  if (view.ndim<0 || view.ndim>64 ||
+      (view.ndim>0 && (!view.shape || !view.strides)))
+    throw invalid_argument("invalid long-double buffer dimensions");
+  if (view.suboffsets) for (int i=0; i<view.ndim; ++i)
+    if (view.suboffsets[i]>=0)
+      throw invalid_argument("indirect long-double buffers are unsupported");
+  if (!view.format)
+    throw invalid_argument("long-double buffer does not expose a PEP 3118 format");
+
+  string format(view.format);
+  char prefix=0;
+  if (!format.empty() && string("@=<>!").find(format[0])!=string::npos)
+    { prefix=format[0]; format.erase(0,1); }
+  const uint16_t one=1;
+  const bool little=*reinterpret_cast<const uint8_t *>(&one)==1;
+  if ((prefix=='<' && !little) || ((prefix=='>' || prefix=='!') && little))
+    throw invalid_argument("non-native byte order cannot be used zero-copy");
+
+  const bool is_complex=(format=="Zg");
+  if (!is_complex && format!="g")
+    throw runtime_error("unsupported data type: expected native long double");
+  if ((expected==native_ld_kind::real && is_complex) ||
+      (expected==native_ld_kind::complex && !is_complex))
+    throw runtime_error("incorrect data type for long-double FFT operation");
+  const size_t itemsize=is_complex ? sizeof(clong) : sizeof(long double);
+  const size_t alignment=is_complex ? alignof(clong) : alignof(long double);
+  if (view.itemsize<0 || size_t(view.itemsize)!=itemsize)
+    throw invalid_argument("long-double buffer item size does not match the native type");
+
+  shape_t shape(size_t(view.ndim));
+  vector<int64_t> strides(size_t(view.ndim));
+  size_t count=1;
+  for (int i=0; i<view.ndim; ++i)
+    {
+    if (view.shape[i]<0 || (view.shape[i]>0 &&
+        count>numeric_limits<size_t>::max()/size_t(view.shape[i])))
+      throw invalid_argument("invalid or overflowing long-double buffer shape");
+    shape[size_t(i)]=size_t(view.shape[i]);
+    count*=shape[size_t(i)];
+    const Py_ssize_t stride=view.strides[i];
+    const Py_ssize_t element_stride=stride/Py_ssize_t(itemsize);
+    if (stride%Py_ssize_t(itemsize) ||
+        element_stride<numeric_limits<int64_t>::min() ||
+        element_stride>numeric_limits<int64_t>::max())
+      throw invalid_argument("invalid long-double buffer stride");
+    strides[size_t(i)]=int64_t(element_stride);
+    }
+  if (count && !view.buf)
+    throw invalid_argument("non-empty long-double buffer has a null data pointer");
+  if (view.buf && reinterpret_cast<uintptr_t>(view.buf)%alignment)
+    throw invalid_argument("long-double buffer is not naturally aligned");
+  if (view.len<0 || count>size_t(numeric_limits<Py_ssize_t>::max())/itemsize ||
+      size_t(view.len)!=count*itemsize)
+    throw invalid_argument("long-double buffer length does not match its shape");
+
+  auto dtype=is_complex ? detail_pybind::ducc_clongdouble_dtype
+                        : detail_pybind::ducc_longdouble_dtype;
+  // ndarray_create copies shape and strides into its own metadata.
+  NpArr array(view.buf, shape.size(), shape.data(), source, strides.data(), dtype);
+  MR_assert(array.data()==view.buf, "long-double view changed its buffer pointer");
+  return array;
+  }
+
+class native_ld_view
+  {
+  // Members are destroyed in reverse order: drop the ndarray handle before
+  // releasing the acquired Python buffer.
+  native_ld_pin pin_;
+  NpArr array_;
+
+  public:
+    native_ld_view(py::handle source, bool writable,
+      native_ld_kind expected=native_ld_kind::any)
+      : pin_(source, writable),
+        array_(make_native_ld_array_view(source, pin_.view, expected))
+      {}
+    NpArr &array() { return array_; }
+    const NpArr &array() const { return array_; }
+  };
+
+template<typename T> DUCC0_FFT_COLD static py::object make_native_ld_array(const shape_t &shape)
+  {
+  auto np=py::module_::import_("numpy");
+  const char *dtype=is_same<T,clong>::value ? "clongdouble" : "longdouble";
+  return np.attr("empty")(py::cast(shape), py::arg("dtype")=np.attr(dtype));
+  }
+
+template<typename T, typename F> DUCC0_FFT_COLD static py::object with_native_ld_output(
+  const py::object &requested, const shape_t &shape, F &&operation)
+  {
+  py::object result=requested.is_none() ? make_native_ld_array<T>(shape) : requested;
+  constexpr auto expected=is_same<T,clong>::value
+    ? native_ld_kind::complex : native_ld_kind::real;
+  native_ld_view output(result, true, expected);
+  OptNpArr out_arr(output.array());
+  operation(out_arr);
+  return result;
+  }
+
+template<typename T, typename F> DUCC0_FFT_COLD static py::object transform_native_ld(
+  py::handle a, const py::object &out, native_ld_kind kind, F &&transform)
+  {
+  native_ld_view input(a, false, kind);
+  auto in=CNpArr(input.array());
+  return with_native_ld_output<T>(out, detail_pybind::copy_shape(in), [&](const OptNpArr &out_) {
+    transform(in, out_);
+    });
+  }
+
+DUCC0_FFT_COLD static py::object c2c_native_ld(py::object a, const OptAxes &axes,
+  bool forward, int inorm, py::object out, size_t nthreads)
+  {
+  return transform_native_ld<clong>(a, out, native_ld_kind::any,
+    [&](const CNpArr &in, const OptNpArr &out_) {
+    if (isPyarr<clong>(in))
+      (void)c2c_internal<ldbl_t>(in, axes, forward, inorm, out_, nthreads);
+    else
+      (void)c2c_sym_internal<ldbl_t>(in, axes, forward, inorm, out_, nthreads);
+    });
+  }
+
+DUCC0_FFT_COLD static py::object r2c_native_ld(py::object a, const OptAxes &axes,
+  bool forward, int inorm, py::object out, size_t nthreads)
+  {
+  native_ld_view input(a, false, native_ld_kind::real);
+  CNpArr in(input.array());
+  auto dims=detail_pybind::copy_shape(in);
+  auto transform_axes=makeaxes(in, axes);
+  dims[transform_axes.back()]=(dims[transform_axes.back()]>>1)+1;
+  return with_native_ld_output<clong>(out, dims, [&](const OptNpArr &out_) {
+    (void)r2c_internal<ldbl_t>(in, axes, forward, inorm, out_, nthreads);
+    });
+  }
+
+DUCC0_FFT_COLD static py::object c2r_native_ld(py::object a, const OptAxes &axes,
+  size_t lastsize, bool forward, int inorm, py::object out, size_t nthreads,
+  bool allow_overwriting_input)
+  {
+  native_ld_view input(a, allow_overwriting_input,
+    native_ld_kind::complex);
+  auto in=input.array();
+  auto transform_axes=makeaxes(CNpArr(in), axes);
+  auto dims=detail_pybind::copy_shape(CNpArr(in));
+  const size_t axis=transform_axes.back();
+  if (lastsize==0) lastsize=2*dims[axis]-1;
+  if ((lastsize/2)+1!=dims[axis]) throw invalid_argument("bad lastsize");
+  dims[axis]=lastsize;
+  return with_native_ld_output<ldbl_t>(out, dims, [&](const OptNpArr &out_) {
+    (void)c2r_internal<ldbl_t>(in, axes, lastsize, forward, inorm, out_,
+      nthreads, allow_overwriting_input);
+    });
+  }
+
+using native_real_transform = NpArr (*)(const CNpArr &, const OptAxes &, int,
+  const OptNpArr &, size_t);
+template<native_real_transform transform> DUCC0_FFT_COLD static py::object real_transform_native_ld(
+  py::object a, const OptAxes &axes, int inorm, py::object out, size_t nthreads)
+  {
+  return transform_native_ld<ldbl_t>(a, out, native_ld_kind::real,
+    [&](const CNpArr &in, const OptNpArr &out_) {
+    (void)transform(in, axes, inorm, out_, nthreads);
+    });
+  }
+
+using native_fftpack_transform = NpArr (*)(const CNpArr &, const OptAxes &,
+  bool, bool, int, const OptNpArr &, size_t);
+template<native_fftpack_transform transform> DUCC0_FFT_COLD static py::object fftpack_native_ld(
+  py::object a, const OptAxes &axes, bool real2hermitian, bool forward,
+  int inorm, py::object out, size_t nthreads)
+  {
+  return transform_native_ld<ldbl_t>(a, out, native_ld_kind::real,
+    [&](const CNpArr &in, const OptNpArr &out_) {
+    (void)transform(in, axes, real2hermitian, forward, inorm, out_, nthreads);
+    });
+  }
+
+using native_fftw_transform = NpArr (*)(const CNpArr &, const OptAxes &, bool,
+  int, const OptNpArr &, size_t);
+template<native_fftw_transform transform> DUCC0_FFT_COLD static py::object fftw_native_ld(
+  py::object a, const OptAxes &axes, bool forward, int inorm, py::object out,
+  size_t nthreads)
+  {
+  return transform_native_ld<ldbl_t>(a, out, native_ld_kind::real,
+    [&](const CNpArr &in, const OptNpArr &out_) {
+    (void)transform(in, axes, forward, inorm, out_, nthreads);
+    });
+  }
+
+using native_dcst_transform = NpArr (*)(const CNpArr &, const OptAxes &, int,
+  int, const OptNpArr &, size_t);
+template<native_dcst_transform transform> DUCC0_FFT_COLD static py::object dcst_native_ld(
+  py::object a, int type, const OptAxes &axes, int inorm, py::object out,
+  size_t nthreads)
+  {
+  return transform_native_ld<ldbl_t>(a, out, native_ld_kind::real,
+    [&](const CNpArr &in, const OptNpArr &out_) {
+    (void)transform(in, axes, type, inorm, out_, nthreads);
+    });
+  }
+
+DUCC0_FFT_COLD static py::object convolve_axis_native_ld(py::object in_, py::object out_,
+  size_t axis, py::object kernel_, size_t nthreads)
+  {
+  native_ld_view input(in_, false);
+  auto kind=isPyarr<clong>(CNpArr(input.array()))
+    ? native_ld_kind::complex : native_ld_kind::real;
+  native_ld_view output(out_, true, kind);
+  native_ld_view kernel(kernel_, false, kind);
+  if (kind==native_ld_kind::complex)
+    (void)convolve_axis_internal_c<ldbl_t>(CNpArr(input.array()), output.array(), axis,
+      CNpArr(kernel.array()), nthreads);
+  else
+    (void)convolve_axis_internal<ldbl_t>(CNpArr(input.array()), output.array(), axis,
+      CNpArr(kernel.array()), nthreads);
+  return out_;
+  }
+
+#endif
 
 const char *fft_DS = R"""(Fast Fourier, sine/cosine, and Hartley transforms.
 
@@ -930,6 +1207,50 @@ out : int
 
 )""";
 
+#ifdef DUCC0_USE_NANOBIND
+DUCC0_FFT_COLD static void add_native_ld_fallbacks(py::module_ &m)
+  {
+  using namespace py::literals;
+  auto None=py::none();
+  m.def("c2c", c2c_native_ld, c2c_DS, "a"_a, "axes"_a=None,
+    "forward"_a=true, "inorm"_a=0, "out"_a=None, "nthreads"_a=1);
+  m.def("r2c", r2c_native_ld, r2c_DS, "a"_a, "axes"_a=None,
+    "forward"_a=true, "inorm"_a=0, "out"_a=None, "nthreads"_a=1);
+  m.def("c2r", c2r_native_ld, c2r_DS, "a"_a, "axes"_a=None, "lastsize"_a=0,
+    "forward"_a=true, "inorm"_a=0, "out"_a=None, "nthreads"_a=1,
+    "allow_overwriting_input"_a=false);
+  m.def("r2r_fftpack", fftpack_native_ld<r2r_fftpack_internal<ldbl_t>>,
+    r2r_fftpack_DS, "a"_a, "axes"_a, "real2hermitian"_a, "forward"_a,
+    "inorm"_a=0, "out"_a=None, "nthreads"_a=1);
+  m.def("r2r_fftw", fftw_native_ld<r2r_fftw_internal<ldbl_t>>,
+    r2r_fftw_DS, "a"_a, "axes"_a, "forward"_a, "inorm"_a=0,
+    "out"_a=None, "nthreads"_a=1);
+  m.def("separable_hartley",
+    real_transform_native_ld<separable_hartley_internal<ldbl_t>>,
+    separable_hartley_DS, "a"_a, "axes"_a=None, "inorm"_a=0,
+    "out"_a=None, "nthreads"_a=1);
+  m.def("genuine_hartley",
+    real_transform_native_ld<genuine_hartley_internal<ldbl_t>>,
+    genuine_hartley_DS, "a"_a, "axes"_a=None, "inorm"_a=0,
+    "out"_a=None, "nthreads"_a=1);
+  m.def("separable_fht",
+    real_transform_native_ld<separable_fht_internal<ldbl_t>>,
+    separable_fht_DS, "a"_a, "axes"_a=None, "inorm"_a=0,
+    "out"_a=None, "nthreads"_a=1);
+  m.def("genuine_fht",
+    real_transform_native_ld<genuine_fht_internal<ldbl_t>>,
+    genuine_fht_DS, "a"_a, "axes"_a=None, "inorm"_a=0,
+    "out"_a=None, "nthreads"_a=1);
+  m.def("dct", dcst_native_ld<dct_internal<ldbl_t>>, dct_DS, "a"_a,
+    "type"_a, "axes"_a=None, "inorm"_a=0, "out"_a=None, "nthreads"_a=1);
+  m.def("dst", dcst_native_ld<dst_internal<ldbl_t>>, dst_DS, "a"_a,
+    "type"_a, "axes"_a=None, "inorm"_a=0, "out"_a=None, "nthreads"_a=1);
+  m.def("convolve_axis", convolve_axis_native_ld, convolve_axis_DS,
+    "in"_a, "out"_a, "axis"_a, "kernel"_a, "nthreads"_a=1);
+  }
+#endif
+#undef DUCC0_FFT_COLD
+
 } // unnamed namespace
 
 void add_fft(py::module_ &msup)
@@ -963,6 +1284,14 @@ void add_fft(py::module_ &msup)
     "out"_a=None, "nthreads"_a=1);
   m.def("convolve_axis", convolve_axis, convolve_axis_DS, "in"_a, "out"_a,
     "axis"_a, "kernel"_a, "nthreads"_a=1);
+
+#ifdef DUCC0_USE_NANOBIND
+  // Keep the private object fallbacks out of nanobind-generated signatures.
+  const char *stubgen=std::getenv("NB_STUBGEN");
+  const bool generating_stubs=stubgen && stubgen[0]=='1';
+  if (has_extended_longdouble && !generating_stubs)
+    add_native_ld_fallbacks(m);
+#endif
 
   static PyMethodDef good_size_meth[] =
     {{"good_size", good_size, METH_VARARGS, good_size_DS},

@@ -54,43 +54,47 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // helper file for ducc0 FFT template instantiations
 
-template void c2c(const cfmav<complex<T>> &in,
+#ifndef DUCC0_FFTINST_ATTR
+#define DUCC0_FFTINST_ATTR
+#endif
+
+template DUCC0_FFTINST_ATTR void c2c(const cfmav<complex<T>> &in,
   const vfmav<complex<T>> &out, const shape_t &axes, bool forward,
   T fct, size_t nthreads);
-template void dct(const cfmav<T> &in, const vfmav<T> &out,
+template DUCC0_FFTINST_ATTR void dct(const cfmav<T> &in, const vfmav<T> &out,
   const shape_t &axes, int type, T fct, bool ortho, size_t nthreads);
-template void dst(const cfmav<T> &in, const vfmav<T> &out,
+template DUCC0_FFTINST_ATTR void dst(const cfmav<T> &in, const vfmav<T> &out,
   const shape_t &axes, int type, T fct, bool ortho, size_t nthreads);
-template void r2c(const cfmav<T> &in,
+template DUCC0_FFTINST_ATTR void r2c(const cfmav<T> &in,
   const vfmav<complex<T>> &out, size_t axis, bool forward, T fct,
   size_t nthreads);
-template void r2c(const cfmav<T> &in,
+template DUCC0_FFTINST_ATTR void r2c(const cfmav<T> &in,
   const vfmav<complex<T>> &out, const shape_t &axes,
   bool forward, T fct, size_t nthreads);
-template void c2r(const cfmav<complex<T>> &in,
+template DUCC0_FFTINST_ATTR void c2r(const cfmav<complex<T>> &in,
   const vfmav<T> &out,  size_t axis, bool forward, T fct, size_t nthreads);
-template void c2r(const cfmav<complex<T>> &in,
+template DUCC0_FFTINST_ATTR void c2r(const cfmav<complex<T>> &in,
   const vfmav<T> &out, const shape_t &axes, bool forward, T fct,
   size_t nthreads);
-template void c2r_mut(const vfmav<complex<T>> &in,
+template DUCC0_FFTINST_ATTR void c2r_mut(const vfmav<complex<T>> &in,
   const vfmav<T> &out, const shape_t &axes, bool forward, T fct,
   size_t nthreads);
-template void r2r_fftpack(const cfmav<T> &in,
+template DUCC0_FFTINST_ATTR void r2r_fftpack(const cfmav<T> &in,
   const vfmav<T> &out, const shape_t &axes, bool real2hermitian, bool forward,
   T fct, size_t nthreads);
-template void r2r_fftw(const cfmav<T> &in,
+template DUCC0_FFTINST_ATTR void r2r_fftw(const cfmav<T> &in,
   const vfmav<T> &out, const shape_t &axes, bool forward,
   T fct, size_t nthreads);
-template void r2r_separable_hartley(const cfmav<T> &in,
+template DUCC0_FFTINST_ATTR void r2r_separable_hartley(const cfmav<T> &in,
   const vfmav<T> &out, const shape_t &axes, T fct, size_t nthreads);
-template void r2r_separable_fht(const cfmav<T> &in,
+template DUCC0_FFTINST_ATTR void r2r_separable_fht(const cfmav<T> &in,
   const vfmav<T> &out, const shape_t &axes, T fct, size_t nthreads);
-template void r2r_genuine_hartley(const cfmav<T> &in,
+template DUCC0_FFTINST_ATTR void r2r_genuine_hartley(const cfmav<T> &in,
   const vfmav<T> &out, const shape_t &axes, T fct, size_t nthreads);
-template void r2r_genuine_fht(const cfmav<T> &in,
+template DUCC0_FFTINST_ATTR void r2r_genuine_fht(const cfmav<T> &in,
   const vfmav<T> &out, const shape_t &axes, T fct, size_t nthreads);
-template void convolve_axis(const cfmav<T> &in,
+template DUCC0_FFTINST_ATTR void convolve_axis(const cfmav<T> &in,
   const vfmav<T> &out, size_t axis, const cmav<T,1> &kernel, size_t nthreads);
-template void convolve_axis(const cfmav<complex<T>> &in,
+template DUCC0_FFTINST_ATTR void convolve_axis(const cfmav<complex<T>> &in,
   const vfmav<complex<T>> &out, size_t axis, const cmav<complex<T>,1> &kernel,
   size_t nthreads);

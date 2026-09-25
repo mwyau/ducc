@@ -30,6 +30,12 @@ set(PYMOD_SOURCES
     python/pointingprovider_pymod.cc python/ducc.cc)
 
 if (DEFINED ENV{DUCC0_USE_NANOBIND})
+    list(APPEND CXX_SOURCES src/ducc0/fft/fft_inst_ld.cc)
+    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        # Keep nanobind-only long-double kernels out of the ordinary FFT LTO unit.
+        set_source_files_properties(src/ducc0/fft/fft_inst_ld.cc
+            PROPERTIES COMPILE_OPTIONS "-fno-lto")
+    endif()
     execute_process(
             COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
             OUTPUT_STRIP_TRAILING_WHITESPACE

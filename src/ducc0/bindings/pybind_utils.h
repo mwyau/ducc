@@ -67,12 +67,14 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <pybind11/functional.h>
 #endif
 #include <cstddef>
+#include <complex>
 #include <string>
 #include <array>
 #include <vector>
 #include <optional>
 #include <variant>
 #include <tuple>
+#include <type_traits>
 
 #include "ducc0/infra/error_handling.h"
 #include "ducc0/infra/mav.h"
@@ -110,12 +112,31 @@ template<typename T> using CNpArrT = py::array_t<T>;
 using OptNpArr = optional<NpArr>;
 using OptCNpArr = optional<CNpArr>;
 
+#ifdef DUCC0_USE_NANOBIND
+// These are DUCC-private sentinels, never public DLPack dtypes. Their reserved
+// codes distinguish native C++ long double from complex<long double> without
+// claiming that either representation is IEEE binary128.
+inline constexpr py::dlpack::dtype ducc_longdouble_dtype{254, 8, 1};
+inline constexpr py::dlpack::dtype ducc_clongdouble_dtype{255, 8, 1};
+template<typename T> inline constexpr bool is_native_longdouble_type =
+  is_same<typename remove_cv<T>::type, long double>::value ||
+  is_same<typename remove_cv<T>::type, complex<long double>>::value;
+#endif
+
 static inline string makeSpec(const string &name)
   { return (name=="") ? "" : name+": "; }
 
 template<typename T> bool isPyarr(const CNpArr &obj)
 #ifdef DUCC0_USE_NANOBIND
-  { return obj.dtype()==py::dtype<T>(); }
+  {
+  using U = typename remove_cv<T>::type;
+  if constexpr (is_same<U, long double>::value)
+    return obj.dtype()==ducc_longdouble_dtype;
+  else if constexpr (is_same<U, complex<long double>>::value)
+    return obj.dtype()==ducc_clongdouble_dtype;
+  else
+    return obj.dtype()==py::dtype<T>();
+  }
 #else
   { return py::isinstance<py::array_t<T>>(obj); }
 #endif
@@ -163,14 +184,24 @@ template<typename T> cfmav<T> to_cfmav(const CNpArr &obj, const string &name="")
   return cfmav<T>(reinterpret_cast<const T *>(obj.data()),
     copy_shape(obj, spec), copy_strides<T,false>(obj, spec));
   }
-template<typename T> cfmav<T> to_cfmav(const CNpArrT<T> &obj, const string &name="")
+#ifdef DUCC0_USE_NANOBIND
+template<typename T, typename = enable_if_t<!is_native_longdouble_type<T>>>
+#else
+template<typename T>
+#endif
+cfmav<T> to_cfmav(const CNpArrT<T> &obj, const string &name="")
   { return to_cfmav<T>(CNpArr(obj), name); }
 
 template<typename T, size_t ndim> cmav<T,ndim> to_cmav(const CNpArr &obj,
   const string &name="")
   { return cmav<T,ndim>(to_cfmav<T>(obj, name)); }
 
-template<typename T, size_t ndim> cmav<T,ndim> to_cmav(const CNpArrT<T> &obj,
+#ifdef DUCC0_USE_NANOBIND
+template<typename T, size_t ndim, typename = enable_if_t<!is_native_longdouble_type<T>>>
+#else
+template<typename T, size_t ndim>
+#endif
+cmav<T,ndim> to_cmav(const CNpArrT<T> &obj,
   const string &name="")
   { return cmav<T,ndim>(to_cfmav<T>(obj, name)); }
 
@@ -225,14 +256,20 @@ template<typename T> vfmav<T> to_vfmav(const NpArr &obj, const string &name="")
     copy_shape(CNpArr(obj), spec), copy_strides<T,true>(CNpArr(obj), spec));
 #endif
   }
-  template<typename T> vfmav<T> to_vfmav(const NpArrT<T> &obj, const string &name="")
+#ifdef DUCC0_USE_NANOBIND
+  template<typename T, typename = enable_if_t<!is_native_longdouble_type<T>>>
+#else
+  template<typename T>
+#endif
+  vfmav<T> to_vfmav(const NpArrT<T> &obj, const string &name="")
   { return to_vfmav<T>(NpArr(obj), name); }
 
 
 template<typename T, size_t ndim> vmav<T,ndim> to_vmav(const NpArr &obj,
   const string &name="")
   { return vmav<T,ndim>(to_vfmav<T>(obj, name)); }
-template<typename T, size_t ndim> vmav<T,ndim> to_vmav(const NpArrT<T> &obj,
+template<typename T, size_t ndim>
+vmav<T,ndim> to_vmav(const NpArrT<T> &obj,
   const string &name="")
   { return to_vmav<T,ndim>(NpArr(obj), name); }
 
@@ -253,17 +290,24 @@ template<typename T> void zero_Pyarr(const NpArr &arr, size_t nthreads=1)
 template<typename T> NpArr make_Pyarr(const shape_t &dims, bool zero=false, size_t nthreads=1)
   {
 #ifdef DUCC0_USE_NANOBIND
-  auto *res = new vfmav<T>(dims, PAGE_IN(nthreads));
-  py::capsule owner(res, [](void *p) noexcept {
-      delete reinterpret_cast<vfmav<T> *>(p);
-    });
-  NpArr res_(NpArrT<T>(res->data(), dims.size(), dims.data(), owner));
+  if constexpr (is_native_longdouble_type<T>)
+    throw runtime_error("native long-double results must use the buffer bridge");
+  else
+    {
+    auto *res = new vfmav<T>(dims, PAGE_IN(nthreads));
+    py::capsule owner(res, [](void *p) noexcept {
+        delete reinterpret_cast<vfmav<T> *>(p);
+      });
+    NpArr res_(NpArrT<T>(res->data(), dims.size(), dims.data(), owner));
+    if (zero) zero_Pyarr<T>(res_, nthreads);
+    return res_;
+    }
 #else
   auto res_=NpArr(NpArrT<T>(dims));
   page_in_memory(reinterpret_cast<T *>(res_.mutable_data()), res_.size(), nthreads);
-#endif
   if (zero) zero_Pyarr<T>(res_, nthreads);
   return res_;
+#endif
   }
 template<typename T, size_t ndim> NpArr make_Pyarr
   (const array<size_t,ndim> &dims, bool zero=false)

@@ -21,7 +21,9 @@ from ducc0.misc import l2error as l2error
 import numpy as np
 import pytest
 from numpy.testing import assert_, assert_allclose
+import ctypes
 import platform
+import sys
 
 pmp = pytest.mark.parametrize
 
@@ -35,6 +37,18 @@ len1D = list(range(1, 256)) + list(range(1700, 2048)) + [137*137]
 
 
 def _assert_close(a, b, epsilon):
+    ext_dtypes = (np.dtype(np.longdouble), np.dtype(np.clongdouble))
+    if np.asarray(a).dtype in ext_dtypes or np.asarray(b).dtype in ext_dtypes:
+        # misc.l2error currently cannot consume DUCC-private nanobind views.
+        # Keep its normalized L2 metric and accumulate in native long double.
+        aa, bb = np.asarray(a), np.asarray(b)
+        aa2 = np.sum(np.abs(aa)**2, dtype=np.longdouble)
+        bb2 = np.sum(np.abs(bb)**2, dtype=np.longdouble)
+        delta2 = np.sum(np.abs(aa-bb)**2, dtype=np.longdouble)
+        denominator = max(aa2, bb2)
+        err = np.longdouble(0) if denominator == 0 else np.sqrt(delta2/denominator)
+        assert_allclose(float(err), 0, atol=epsilon)
+        return
     assert_allclose(l2error(a, b), 0, atol=epsilon)
 
 
@@ -88,14 +102,100 @@ ctype = {np.float32: np.complex64,
          np.longdouble: np.clongdouble}
 
 
-on_windows = ("microsoft" in platform.uname()[3].lower() or
-              platform.system() == "Windows")
-on_arm = ("arm" in platform.machine().lower())
-on_ppc64le = ("ppc64le" in platform.machine().lower())
-true_long_double = (np.longdouble != np.float64 and not (on_windows or on_arm or on_ppc64le))
+def _native_buffer_format(dtype):
+    fmt = memoryview(np.empty(1, dtype=dtype)).format
+    if fmt and fmt[0] in "@=<>!":
+        prefix, fmt = fmt[0], fmt[1:]
+        little = sys.byteorder == "little"
+        if (prefix == "<" and not little) or (prefix in ">!" and little):
+            return None
+    return fmt
+
+
+on_ppc64le = "ppc64le" in platform.machine().lower()
+true_long_double = (
+    np.finfo(np.longdouble).nmant > np.finfo(np.float64).nmant
+    and np.dtype(np.longdouble).itemsize == ctypes.sizeof(ctypes.c_longdouble)
+    and np.dtype(np.clongdouble).itemsize == 2 * ctypes.sizeof(ctypes.c_longdouble)
+    and _native_buffer_format(np.longdouble) == "g"
+    and _native_buffer_format(np.clongdouble) == "Zg"
+    and not on_ppc64le
+)
 dtypes = [np.float32, np.float64]
-if true_long_double and ducc0.__wrapper__ != "nanobind":
+if true_long_double:
     dtypes += [np.longdouble]
+
+
+@pytest.mark.skipif(not true_long_double,
+                    reason="native long-double buffers unavailable or PPC safeguard")
+def test_native_longdouble_buffers():
+    rng = np.random.default_rng(42)
+    real_base = (rng.random(24) - 0.5).astype(np.longdouble)
+    real = real_base[::2]
+    real.setflags(write=False)
+
+    spectrum = np.empty(real.size // 2 + 1, dtype=np.clongdouble)
+    assert fft.r2c(real, out=spectrum) is spectrum
+    restored_base = np.empty(real.size * 2, dtype=np.longdouble)
+    restored = restored_base[::2]
+    assert fft.c2r(spectrum, lastsize=real.size, forward=False, inorm=2,
+                   out=restored) is restored
+    assert restored.dtype == np.dtype(np.longdouble)
+    _assert_close(real, restored, 1e-15)
+
+    inplace_buf = np.empty(real.size // 2 + 1, dtype=np.clongdouble)
+    inplace_real = inplace_buf.view(np.longdouble)[:real.size]
+    inplace_real[()] = real
+    inplace_ref = inplace_real.copy()
+    fft.r2c(inplace_real, out=inplace_buf)
+    assert fft.c2r(inplace_buf, lastsize=real.size, forward=False, inorm=2,
+                    out=inplace_real) is inplace_real
+    _assert_close(inplace_ref, inplace_real, 1e-15)
+
+    complex_base = (real_base + 1j * real_base[::-1]).astype(np.clongdouble)
+    complex_input = complex_base[::2]
+    complex_input.setflags(write=False)
+    complex_out = np.empty(complex_input.size, dtype=np.clongdouble)
+    assert fft.c2c(complex_input, out=complex_out) is complex_out
+    complex_back = fft.c2c(complex_out, forward=False, inorm=2)
+    assert complex_back.dtype == np.dtype(np.clongdouble)
+    _assert_close(complex_input, complex_back, 1e-15)
+
+    inplace = complex_input.copy()
+    assert fft.c2c(inplace, out=inplace) is inplace
+    fft.c2c(inplace, forward=False, inorm=2, out=inplace)
+    _assert_close(complex_input, inplace, 1e-15)
+
+    c2c_real = fft.c2c(real)
+    assert c2c_real.dtype == np.dtype(np.clongdouble)
+    _assert_close(fft.genuine_fht(real), c2c_real.real-c2c_real.imag, 1e-15)
+    _assert_close(fft.genuine_hartley(real), c2c_real.real+c2c_real.imag, 1e-15)
+    dct = fft.dct(real, type=2)
+    dst = fft.dst(real, type=2)
+    assert dct.dtype == np.dtype(np.longdouble)
+    assert dst.dtype == np.dtype(np.longdouble)
+    _assert_close(real, fft.dct(dct, type=3, inorm=2), 1e-15)
+    _assert_close(real, fft.dst(dst, type=3, inorm=2), 1e-15)
+    hartley = fft.genuine_hartley(real)
+    assert hartley.dtype == np.dtype(np.longdouble)
+    _assert_close(real, fft.genuine_hartley(hartley, inorm=2), 1e-15)
+
+    kernel = (real_base[:12] + 1j * real_base[12:]).astype(np.clongdouble)
+    conv_out_base = np.empty(32, dtype=np.clongdouble)
+    conv_out = conv_out_base[::2]
+    assert fft.convolve_axis(complex_input, conv_out, 0, kernel) is conv_out
+    conv_ref = fft.convolve_axis(
+        complex_input.astype(np.complex128),
+        np.empty(conv_out.shape, dtype=np.complex128), 0,
+        kernel.astype(np.complex128))
+    _assert_close(conv_ref, conv_out, 1e-15)
+
+    with pytest.raises(TypeError):
+        fft.r2c(real.tolist())
+    foreign = real_base.astype(np.dtype(np.longdouble).newbyteorder("S"))
+    if not foreign.dtype.isnative:
+        with pytest.raises((TypeError, ValueError, RuntimeError)):
+            fft.r2c(foreign)
 
 
 @pmp("len", len1D)

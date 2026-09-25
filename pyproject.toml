@@ -94,6 +94,7 @@ sdist.include = [
     "src/ducc0/fft/fft_inst_inc.h",
     "src/ducc0/fft/fft_inst1.cc",
     "src/ducc0/fft/fft_inst2.cc",
+    "src/ducc0/fft/fft_inst_ld.cc",
     "src/ducc0/nufft/nufft_common.h",
     "src/ducc0/nufft/nufft.h",
     "src/ducc0/nufft/spreadinterp.h",
