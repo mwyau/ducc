@@ -1,0 +1,66 @@
+# Keep signatures valid Python where the runtime exposes names/orderings that
+# cannot be written directly in a Python function definition.
+^ducc0\.fft\.convolve_axis$:
+    def convolve_axis(in_: Annotated[NDArray, dict(device='cpu', writable=False)], /, out: Annotated[NDArray, dict(device='cpu')], axis: int, kernel: Annotated[NDArray, dict(device='cpu', writable=False)], nthreads: int = 1) -> Annotated[NDArray, dict(device='cpu')]:
+        \doc
+
+^ducc0\.misc\.transpose$:
+    def transpose(in_: Annotated[NDArray, dict(device='cpu', writable=False)], /, out: Annotated[NDArray, dict(device='cpu')], nthreads: int = 1) -> Annotated[NDArray, dict(device='cpu')]: ...
+
+^ducc0\.misc\.make_noncritical$:
+    def make_noncritical(in_: Annotated[NDArray, dict(device='cpu', writable=False)], /, nthreads: int = 1) -> Annotated[NDArray, dict(device='cpu')]:
+        \doc
+
+^ducc0\.pointingprovider\.PointingProvider\.get_rotated_quaternions$:
+    \from typing import overload
+    @overload
+    def get_rotated_quaternions(self, t0: float, freq: float, rot: Annotated[NDArray, dict(device='cpu', writable=False)], nval: int, rot_left: bool = True) -> Annotated[NDArray, dict(device='cpu')]:
+        \doc
+    @overload
+    def get_rotated_quaternions(self, t0: float, freq: float, rot: Annotated[NDArray, dict(device='cpu', writable=False)], rot_left: bool, out: Annotated[NDArray, dict(device='cpu')]) -> Annotated[NDArray, dict(device='cpu')]:
+        \doc
+    @overload
+    def get_rotated_quaternions(self, t0: float, freq: float, rot: Annotated[NDArray, dict(device='cpu', writable=False)], *, rot_left: bool = True, out: Annotated[NDArray, dict(device='cpu')]) -> Annotated[NDArray, dict(device='cpu')]: ...
+
+^ducc0\.totalconvolve\.ConvolverPlan(_f)?\.__init__$:
+    \from typing import overload
+    @overload
+    def __init__(self, lmax: int, kmax: int, *, npoints: int = 1000000000, sigma_min: float = 1.1, sigma_max: float = 2.6, epsilon: float, nthreads: int = 0) -> None:
+        \doc
+    @overload
+    def __init__(self, lmax: int, kmax: int, npoints: int, sigma_min: float, sigma_max: float, epsilon: float, nthreads: int = 0) -> None: ...
+    @overload
+    def __init__(self, lmax: int, kmax: int, sigma: float, epsilon: float, nthreads: int = 0) -> None: ...
+
+^ducc0\.totalconvolve\.Interpolator(_f)?\.__init__$:
+    \from typing import overload
+    @overload
+    def __init__(self, sky: Annotated[NDArray, dict(device='cpu', writable=False)], beam: Annotated[NDArray, dict(device='cpu', writable=False)], separate: bool, lmax: int, kmax: int, *, npoints: int = 1000000000, sigma_min: float = 1.1, sigma_max: float = 2.6, epsilon: float, nthreads: int = 0) -> None:
+        \doc
+    @overload
+    def __init__(self, sky: Annotated[NDArray, dict(device='cpu', writable=False)], beam: Annotated[NDArray, dict(device='cpu', writable=False)], separate: bool, lmax: int, kmax: int, npoints: int, sigma_min: float, sigma_max: float, epsilon: float, nthreads: int = 0) -> None: ...
+    @overload
+    def __init__(self, lmax: int, kmax: int, ncomp: int, *, npoints: int = 1000000000, sigma_min: float = 1.1, sigma_max: float = 2.6, epsilon: float, nthreads: int = 0) -> None:
+        \doc
+    @overload
+    def __init__(self, lmax: int, kmax: int, ncomp: int, npoints: int, sigma_min: float, sigma_max: float, epsilon: float, nthreads: int = 0) -> None: ...
+    @overload
+    def __init__(self, sky: Annotated[NDArray, dict(device='cpu', writable=False)], beam: Annotated[NDArray, dict(device='cpu', writable=False)], separate: bool, lmax: int, kmax: int, epsilon: float, ofactor: float = 1.5, nthreads: int = 0) -> None: ...
+    @overload
+    def __init__(self, lmax: int, kmax: int, ncomp: int, epsilon: float, ofactor: float = 1.5, nthreads: int = 0) -> None: ...
+
+^ducc0\.wgridder\.ms2dirty$:
+    \from typing import overload
+    @overload
+    def ms2dirty(uvw: Annotated[NDArray, dict(device='cpu', writable=False)], freq: Annotated[NDArray, dict(device='cpu', writable=False)], ms: Annotated[NDArray, dict(device='cpu', writable=False)], *, wgt: Annotated[NDArray, dict(device='cpu', writable=False)] | None = None, npix_x: int, npix_y: int, pixsize_x: float, pixsize_y: float, nu: int = 0, nv: int = 0, epsilon: float, do_wstacking: bool = False, nthreads: int = 1, verbosity: int = 0, mask: Annotated[NDArray, dict(device='cpu', writable=False)] | None = None, double_precision_accumulation: bool = False) -> Annotated[NDArray, dict(device='cpu')]:
+        \doc
+    @overload
+    def ms2dirty(uvw: Annotated[NDArray, dict(device='cpu', writable=False)], freq: Annotated[NDArray, dict(device='cpu', writable=False)], ms: Annotated[NDArray, dict(device='cpu', writable=False)], wgt: Annotated[NDArray, dict(device='cpu', writable=False)] | None, npix_x: int, npix_y: int, pixsize_x: float, pixsize_y: float, nu: int, nv: int, epsilon: float, do_wstacking: bool = False, nthreads: int = 1, verbosity: int = 0, mask: Annotated[NDArray, dict(device='cpu', writable=False)] | None = None, double_precision_accumulation: bool = False) -> Annotated[NDArray, dict(device='cpu')]: ...
+
+^ducc0\.wgridder\.dirty2ms$:
+    \from typing import overload
+    @overload
+    def dirty2ms(uvw: Annotated[NDArray, dict(device='cpu', writable=False)], freq: Annotated[NDArray, dict(device='cpu', writable=False)], dirty: Annotated[NDArray, dict(device='cpu', writable=False)], *, wgt: Annotated[NDArray, dict(device='cpu', writable=False)] | None = None, pixsize_x: float, pixsize_y: float, nu: int = 0, nv: int = 0, epsilon: float, do_wstacking: bool = False, nthreads: int = 1, verbosity: int = 0, mask: Annotated[NDArray, dict(device='cpu', writable=False)] | None = None) -> Annotated[NDArray, dict(device='cpu')]:
+        \doc
+    @overload
+    def dirty2ms(uvw: Annotated[NDArray, dict(device='cpu', writable=False)], freq: Annotated[NDArray, dict(device='cpu', writable=False)], dirty: Annotated[NDArray, dict(device='cpu', writable=False)], wgt: Annotated[NDArray, dict(device='cpu', writable=False)] | None, pixsize_x: float, pixsize_y: float, nu: int, nv: int, epsilon: float, do_wstacking: bool = False, nthreads: int = 1, verbosity: int = 0, mask: Annotated[NDArray, dict(device='cpu', writable=False)] | None = None) -> Annotated[NDArray, dict(device='cpu')]: ...

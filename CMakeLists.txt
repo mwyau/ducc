@@ -44,15 +44,31 @@ if (DEFINED ENV{DUCC0_USE_NANOBIND})
     find_package(nanobind CONFIG REQUIRED)
     nanobind_add_module(${PKGNAME} FREE_THREADED NOSTRIP NB_SUPPRESS_WARNINGS NOMINSIZE ${PYMOD_SOURCES} ${CXX_SOURCES})
     set (DEFS ${DEFS} DUCC0_USE_NANOBIND)
-# Enable this if stubs are required
-#    nanobind_add_stub(
-#        ${PKGNAME}_stub
-#        MODULE ${PKGNAME}
-#        OUTPUT ${PKGNAME}.pyi
-#        PYTHON_PATH $<TARGET_FILE_DIR:${PKGNAME}>
-#        DEPENDS ${PKGNAME}
-#        RECURSIVE
-#    )
+    set(DUCC0_STUB_OUTPUTS
+        stubs/ducc0/__init__.pyi
+        stubs/ducc0/fft.pyi
+        stubs/ducc0/healpix.pyi
+        stubs/ducc0/misc/__init__.pyi
+        stubs/ducc0/misc/experimental.pyi
+        stubs/ducc0/nufft/__init__.pyi
+        stubs/ducc0/nufft/experimental.pyi
+        stubs/ducc0/pointingprovider.pyi
+        stubs/ducc0/sht/__init__.pyi
+        stubs/ducc0/sht/experimental.pyi
+        stubs/ducc0/totalconvolve.pyi
+        stubs/ducc0/wgridder/__init__.pyi
+        stubs/ducc0/wgridder/experimental.pyi)
+    nanobind_add_stub(${PKGNAME}_stub
+        MODULE ${PKGNAME}
+        PYTHON_PATH $<TARGET_FILE_DIR:${PKGNAME}>
+        DEPENDS ${PKGNAME}
+        RECURSIVE
+        OUTPUT_PATH stubs
+        OUTPUT ${DUCC0_STUB_OUTPUTS}
+        PATTERN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/python/nanobind_stub_patterns.txt"
+        MARKER_FILE stubs/ducc0/py.typed)
+    install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/stubs/ducc0"
+        DESTINATION .)
 else()
     find_package(pybind11 REQUIRED)
     pybind11_add_module(${PKGNAME} NO_EXTRAS ${PYMOD_SOURCES} ${CXX_SOURCES})
