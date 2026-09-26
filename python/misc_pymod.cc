@@ -603,12 +603,12 @@ critical, which should be a decent heuristic.
 
 Parameters
 ----------
-in : numpy.ndarray (float or integer dtype)
+input : numpy.ndarray (float or integer dtype)
     the input array
 
 Returns
 -------
-numpy.ndarray (same dtype and content as `in`)
+numpy.ndarray (same dtype and content as `input`)
     A copy of the array with noncritical strides
 )""";
 template<typename T> static NpArr Py2_make_noncritical(const CNpArr &in, size_t nthreads)
@@ -1935,9 +1935,9 @@ void add_misc(py::module_ &msup)
   m.def("GL_weights", Py_GL_weights, "nlat"_a, "nlon"_a);
   m.def("GL_thetas", Py_GL_thetas, "nlat"_a);
 
-  m.def("transpose", Py_transpose, "in"_a, "out"_a, "nthreads"_a=1);
+  m.def("transpose", Py_transpose, "input"_a, "out"_a, "nthreads"_a=1);
 
-  m.def("make_noncritical", Py_make_noncritical, Py_make_noncritical_DS,"in"_a, "nthreads"_a=1);
+  m.def("make_noncritical", Py_make_noncritical, Py_make_noncritical_DS,"input"_a, "nthreads"_a=1);
   m.def("empty_noncritical", Py_empty_noncritical, Py_empty_noncritical_DS, "shape"_a, "dtype"_a, "nthreads"_a=1);
 
   py::class_<Py_OofaNoise> (m, "OofaNoise", Py_OofaNoise_DS/*, py::module_local()*/)

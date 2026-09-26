@@ -630,11 +630,11 @@ void add_wgridder(py::module_ &msup)
   add_pythonfuncs(m);
   add_pythonfuncs(m2);
 
-  m.def("ms2dirty", &Py_ms2dirty, ms2dirty_DS, "uvw"_a, "freq"_a, "ms"_a,
+  m.def("ms2dirty", &Py_ms2dirty, ms2dirty_DS, "uvw"_a, "freq"_a, "ms"_a, py::kw_only(),
     "wgt"_a=None, "npix_x"_a, "npix_y"_a, "pixsize_x"_a, "pixsize_y"_a, "nu"_a=0, "nv"_a=0,
     "epsilon"_a, "do_wstacking"_a=false, "nthreads"_a=1, "verbosity"_a=0, "mask"_a=None,
     "double_precision_accumulation"_a=false);
-  m.def("dirty2ms", &Py_dirty2ms, dirty2ms_DS, "uvw"_a, "freq"_a, "dirty"_a,
+  m.def("dirty2ms", &Py_dirty2ms, dirty2ms_DS, "uvw"_a, "freq"_a, "dirty"_a, py::kw_only(),
     "wgt"_a=None, "pixsize_x"_a, "pixsize_y"_a, "nu"_a=0, "nv"_a=0, "epsilon"_a,
     "do_wstacking"_a=false, "nthreads"_a=1, "verbosity"_a=0, "mask"_a=None);
 

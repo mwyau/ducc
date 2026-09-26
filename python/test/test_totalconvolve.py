@@ -69,6 +69,12 @@ def myalmdot(a1, a2, lmax):
     return ducc0.misc.vdot(compress_alm(a1, lmax), compress_alm(a2, lmax))
 
 
+@pmp("plan", [ducc0.totalconvolve.ConvolverPlan,
+              ducc0.totalconvolve.ConvolverPlan_f])
+def test_convolver_plan_keyword_signature(plan):
+    assert plan(2, 1, epsilon=1e-5).Ntheta() > 0
+
+
 @pmp("lkmax", [(13, 13), (2, 1), (30, 15), (35, 2)])
 def test_against_convolution(lkmax):
     lmax, kmax = lkmax

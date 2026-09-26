@@ -92,3 +92,11 @@ def test_special_add_at_complex(dtype):
     expected = np.array([1+2j, 3+4j + 5+6j, 0], dtype=dtype)
     out = special_add_at(a.copy(), axis=0, index=index, b=b)
     np.testing.assert_array_almost_equal(out, expected)
+
+
+def test_input_keyword_arguments():
+    a = np.arange(6.).reshape(2, 3)
+    out = np.empty_like(a)
+    assert ducc0.misc.transpose(input=a, out=out) is out
+    np.testing.assert_array_equal(out, a)
+    np.testing.assert_array_equal(ducc0.misc.make_noncritical(input=a), a)

@@ -339,6 +339,12 @@ def refconv(a, newlen, axis, k):
     return tmp
 
 
+def test_convolve_axis_input_keyword():
+    a = np.arange(4.)
+    out = np.zeros_like(a)
+    fft.convolve_axis(input=a, out=out, axis=0, kernel=np.ones_like(a))
+
+
 @pmp("L1", tuple(range(3,30)))
 @pmp("L2", tuple(range(3,30)))
 @pmp("dtype", (np.float32, np.float64, np.complex64, np.complex128))

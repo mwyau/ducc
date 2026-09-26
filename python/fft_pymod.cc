@@ -882,16 +882,16 @@ The result is equivalent to
 
 Parameters
 ----------
-in : numpy.ndarray (any real or complex type)
+input : numpy.ndarray (any real or complex type)
     The input data
-out : numpy.ndarray (same type as `in`)
-    The output data. Must have the same shape as `in` except for the axis
+out : numpy.ndarray (same type as `input`)
+    The output data. Must have the same shape as `input` except for the axis
     to be convolved
 axis : integer
     The axis along which the convolution is carried out.
-kernel : one-dimensional numpy.ndarray (same type as `in`)
+kernel : one-dimensional numpy.ndarray (same type as `input`)
     The kernel to be used for convolution
-    The length of this array must be equal to in.shape[axis]
+    The length of this array must be equal to input.shape[axis]
 nthreads : int
     Number of threads to use. If 0, use the system default (typically the number
     of hardware threads on the compute node).
@@ -907,10 +907,10 @@ The main purpose of this routine is efficiency: the combination of the above
 operations can be carried out more quickly than running the individual
 operations in succession.
 
-If `in.shape[axis]!=out.shape[axis]`, the appropriate amount of zero-padding or
+If `input.shape[axis]!=out.shape[axis]`, the appropriate amount of zero-padding or
 truncation will be carried out after the convolution step.
 
-`in` and `out` may overlap in memory. If they do, their first elements must
+`input` and `out` may overlap in memory. If they do, their first elements must
 be at the same memory location, and all their strides must be equal.
 )""";
 
@@ -961,7 +961,7 @@ void add_fft(py::module_ &msup)
     "out"_a=None, "nthreads"_a=1);
   m.def("dst", dst, dst_DS, "a"_a, "type"_a, "axes"_a=None, "inorm"_a=0,
     "out"_a=None, "nthreads"_a=1);
-  m.def("convolve_axis", convolve_axis, convolve_axis_DS, "in"_a, "out"_a,
+  m.def("convolve_axis", convolve_axis, convolve_axis_DS, "input"_a, "out"_a,
     "axis"_a, "kernel"_a, "nthreads"_a=1);
 
   static PyMethodDef good_size_meth[] =

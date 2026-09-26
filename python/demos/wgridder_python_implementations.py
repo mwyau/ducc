@@ -287,10 +287,14 @@ def _ms2dirty_inner_loop(ii, supp, u, v, w, w0, dw, ng, myms):
 
 # Interface adapters
 def ms2dirty_ducc(uvw, freq, ms, nxdirty, nydirty, pixsizex, pixsizey, epsilon, do_wgridding):
-    return wg.ms2dirty(uvw, freq, ms, None, nxdirty, nydirty, pixsizex, pixsizey, 0, 0, epsilon, do_wgridding)
+    return wg.ms2dirty(uvw, freq, ms, wgt=None, npix_x=nxdirty, npix_y=nydirty,
+                       pixsize_x=pixsizex, pixsize_y=pixsizey, nu=0, nv=0,
+                       epsilon=epsilon, do_wstacking=do_wgridding)
 
 def dirty2ms_ducc(uvw, freq, dirty, pixsizex, pixsizey, epsilon, do_wgridding):
-    return wg.dirty2ms(uvw, freq, dirty, None, pixsizex, pixsizey, 0, 0, epsilon, do_wgridding)
+    return wg.dirty2ms(uvw, freq, dirty, wgt=None, pixsize_x=pixsizex,
+                       pixsize_y=pixsizey, nu=0, nv=0, epsilon=epsilon,
+                       do_wstacking=do_wgridding)
 # End interface adapters
 
 
