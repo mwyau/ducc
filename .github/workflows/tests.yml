@@ -30,7 +30,19 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install --upgrade pytest numpy scipy
 
+      - name: Show clang-cl
+        if: runner.os == 'Windows'
+        run: clang-cl --version
+
       - name: Build and install dispatch wheel
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:CXX = "clang-cl"
+          python -m pip install --no-deps -v .
+
+      - name: Build and install dispatch wheel
+        if: runner.os != 'Windows'
         run: python -m pip install --no-deps -v .
 
       - name: Verify V4 dispatch
