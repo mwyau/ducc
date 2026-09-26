@@ -110,9 +110,9 @@ namespace {
 template<typename T> constexpr inline size_t fft_simdlen
   = min<size_t>(8, native_simd<T>::size());
 template<> constexpr inline size_t fft_simdlen<double>
-  = min<size_t>(4, native_simd<double>::size());
+  = min<size_t>(8, native_simd<double>::size());
 template<> constexpr inline size_t fft_simdlen<float>
-  = min<size_t>(8, native_simd<float>::size());
+  = min<size_t>(16, native_simd<float>::size());
 template<typename T> using fft_simd = typename simd_select<T,fft_simdlen<T>>::type;
 template<typename T> constexpr inline bool fft_simd_exists = (fft_simdlen<T> > 1);
 
