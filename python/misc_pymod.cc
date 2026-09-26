@@ -41,6 +41,8 @@
 #include <vector>
 #include <cmath>
 #include <complex>
+#include <cstdlib>
+#include <memory>
 
 
 namespace ducc0 {
@@ -48,6 +50,53 @@ namespace ducc0 {
 namespace detail_pymodule_misc {
 
 using namespace std;
+#ifdef DUCC0_USE_NANOBIND
+using detail_pybind::native_ld_kind;
+using detail_pybind::native_ld_input_view;
+using detail_pybind::native_ld_output_view;
+
+static bool is_native_ld_numpy_dtype(const py::object &dtype,
+  native_ld_kind &kind)
+  {
+  if (!detail_pybind::native_longdouble_supported)
+    return false;
+  static py::object ldtype=py::module_::import_("numpy").attr("dtype")("longdouble");
+  static py::object cldtype=py::module_::import_("numpy").attr("dtype")("clongdouble");
+  if (ldtype.equal(dtype))
+    { kind=native_ld_kind::real; return true; }
+  if (cldtype.equal(dtype))
+    { kind=native_ld_kind::complex; return true; }
+  return false;
+  }
+
+static bool is_native_ld_numpy_array(py::handle arr, native_ld_kind &kind)
+  {
+  auto np=py::module_::import_("numpy");
+  if (!py::isinstance(arr, np.attr("ndarray"))) return false;
+  return is_native_ld_numpy_dtype(py::object(arr.attr("dtype")), kind);
+  }
+
+class misc_array_view
+  {
+  unique_ptr<native_ld_input_view> native_;
+  optional<CNpArr> array_;
+
+  public:
+    explicit misc_array_view(py::handle source)
+      {
+      native_ld_kind kind;
+      if (is_native_ld_numpy_array(source, kind))
+        {
+        native_=make_unique<native_ld_input_view>(source, kind);
+        array_.emplace(CNpArr(native_->array()));
+        }
+      else
+        array_.emplace(py::cast<CNpArr>(source));
+      }
+    const CNpArr &array() const { return *array_; }
+    bool is_native() const { return bool(native_); }
+  };
+#endif
 
 constexpr const char *Py_vdot_DS = R"""(
 Compute the scalar product of two arrays or scalars., i.e. sum_i(conj(a_i)*b_i)
@@ -89,8 +138,12 @@ template<typename T1, typename T2> static FloatOrComplex Py3_vdot(const CNpArr &
   return (acc.imag()==0) ? FloatOrComplex(double(acc.real()))
                          : FloatOrComplex(complex<double>(acc));
   }
-template<typename T1> static FloatOrComplex Py2_vdot(const CNpArr &a, const CNpArr &b)
+template<typename T1> static FloatOrComplex Py2_vdot(const CNpArr &a,
+  const CNpArr &b, bool allow_native_ld)
   {
+#ifndef DUCC0_USE_NANOBIND
+  (void)allow_native_ld;
+#endif
   if (isPyarr<float>(b))
     return Py3_vdot<T1,float>(a,b);
   if (isPyarr<complex<float>>(b))
@@ -99,7 +152,14 @@ template<typename T1> static FloatOrComplex Py2_vdot(const CNpArr &a, const CNpA
     return Py3_vdot<T1,double>(a,b);
   if (isPyarr<complex<double>>(b))
     return Py3_vdot<T1,complex<double>>(a,b);
-#ifndef DUCC0_USE_NANOBIND
+#ifdef DUCC0_USE_NANOBIND
+  // Private markers are accepted only when misc_array_view validated the
+  // corresponding original NumPy array through PEP 3118.
+  if (allow_native_ld && isPyarr<long double>(b))
+    return Py3_vdot<T1,long double>(a,b);
+  if (allow_native_ld && isPyarr<complex<long double>>(b))
+    return Py3_vdot<T1,complex<long double>>(a,b);
+#else
   if (isPyarr<long double>(b))
     return Py3_vdot<T1,long double>(a,b);
   if (isPyarr<complex<long double>>(b))
@@ -107,24 +167,49 @@ template<typename T1> static FloatOrComplex Py2_vdot(const CNpArr &a, const CNpA
 #endif
   MR_fail("type matching failed");
   }
-static FloatOrComplex Py_vdot(const CNpArr &a, const CNpArr &b)
+static FloatOrComplex Py_vdot_impl(const CNpArr &a, const CNpArr &b,
+  bool allow_native_ld_a, bool allow_native_ld_b)
   {
-  if (isPyarr<float>(a))
-    return Py2_vdot<float>(a,b);
-  if (isPyarr<complex<float>>(a))
-    return Py2_vdot<complex<float>>(a,b);
-  if (isPyarr<double>(a))
-    return Py2_vdot<double>(a,b);
-  if (isPyarr<complex<double>>(a))
-    return Py2_vdot<complex<double>>(a,b);
 #ifndef DUCC0_USE_NANOBIND
+  (void)allow_native_ld_a;
+#endif
+  if (isPyarr<float>(a))
+    return Py2_vdot<float>(a,b,allow_native_ld_b);
+  if (isPyarr<complex<float>>(a))
+    return Py2_vdot<complex<float>>(a,b,allow_native_ld_b);
+  if (isPyarr<double>(a))
+    return Py2_vdot<double>(a,b,allow_native_ld_b);
+  if (isPyarr<complex<double>>(a))
+    return Py2_vdot<complex<double>>(a,b,allow_native_ld_b);
+#ifdef DUCC0_USE_NANOBIND
+  if (allow_native_ld_a && isPyarr<long double>(a))
+    return Py2_vdot<long double>(a,b,allow_native_ld_b);
+  if (allow_native_ld_a && isPyarr<complex<long double>>(a))
+    return Py2_vdot<complex<long double>>(a,b,allow_native_ld_b);
+#else
   if (isPyarr<long double>(a))
-    return Py2_vdot<long double>(a,b);
+    return Py2_vdot<long double>(a,b,true);
   if (isPyarr<complex<long double>>(a))
-    return Py2_vdot<complex<long double>>(a,b);
+    return Py2_vdot<complex<long double>>(a,b,true);
 #endif
   MR_fail("type matching failed");
   }
+static FloatOrComplex Py_vdot(const CNpArr &a, const CNpArr &b)
+  {
+#ifdef DUCC0_USE_NANOBIND
+  return Py_vdot_impl(a,b,false,false);
+#else
+  return Py_vdot_impl(a,b,true,true);
+#endif
+  }
+#ifdef DUCC0_USE_NANOBIND
+static FloatOrComplex Py_vdot_native_ld(py::fallback a, py::fallback b)
+  {
+  misc_array_view av(a), bv(b);
+  detail_pybind::native_ld_bridge_scope bridge_scope;
+  return Py_vdot_impl(av.array(), bv.array(), av.is_native(), bv.is_native());
+  }
+#endif
 
 
 constexpr const char *Py_special_add_at_DS = R"""(
@@ -488,8 +573,12 @@ template<typename T1, typename T2> static double Py3_l2error(const CNpArr &a_, c
   if (maxval==Tacc(0)) return 0.;
   return double(sqrt(acc3/maxval));
   }
-template<typename T1> static double Py2_l2error(const CNpArr &a, const CNpArr &b)
+template<typename T1> static double Py2_l2error(const CNpArr &a,
+  const CNpArr &b, bool allow_native_ld)
   {
+#ifndef DUCC0_USE_NANOBIND
+  (void)allow_native_ld;
+#endif
   if (isPyarr<float>(b))
     return Py3_l2error<float,T1>(b,a);
   if (isPyarr<complex<float>>(b))
@@ -498,7 +587,14 @@ template<typename T1> static double Py2_l2error(const CNpArr &a, const CNpArr &b
     return Py3_l2error<double,T1>(b,a);
   if (isPyarr<complex<double>>(b))
     return Py3_l2error<T1,complex<double>>(a,b);
-#ifndef DUCC0_USE_NANOBIND
+#ifdef DUCC0_USE_NANOBIND
+  // Private markers are accepted only when misc_array_view validated the
+  // corresponding original NumPy array through PEP 3118.
+  if (allow_native_ld && isPyarr<long double>(b))
+    return Py3_l2error<long double,T1>(b,a);
+  if (allow_native_ld && isPyarr<complex<long double>>(b))
+    return Py3_l2error<T1,complex<long double>>(a,b);
+#else
   if (isPyarr<long double>(b))
     return Py3_l2error<long double,T1>(b,a);
   if (isPyarr<complex<long double>>(b))
@@ -506,24 +602,49 @@ template<typename T1> static double Py2_l2error(const CNpArr &a, const CNpArr &b
 #endif
   MR_fail("type matching failed");
   }
-static double Py_l2error(const CNpArr &a, const CNpArr &b)
+static double Py_l2error_impl(const CNpArr &a, const CNpArr &b,
+  bool allow_native_ld_a, bool allow_native_ld_b)
   {
-  if (isPyarr<float>(a))
-    return Py2_l2error<float>(a,b);
-  if (isPyarr<complex<float>>(a))
-    return Py2_l2error<complex<float>>(a,b);
-  if (isPyarr<double>(a))
-    return Py2_l2error<double>(a,b);
-  if (isPyarr<complex<double>>(a))
-    return Py2_l2error<complex<double>>(a,b);
 #ifndef DUCC0_USE_NANOBIND
+  (void)allow_native_ld_a;
+#endif
+  if (isPyarr<float>(a))
+    return Py2_l2error<float>(a,b,allow_native_ld_b);
+  if (isPyarr<complex<float>>(a))
+    return Py2_l2error<complex<float>>(a,b,allow_native_ld_b);
+  if (isPyarr<double>(a))
+    return Py2_l2error<double>(a,b,allow_native_ld_b);
+  if (isPyarr<complex<double>>(a))
+    return Py2_l2error<complex<double>>(a,b,allow_native_ld_b);
+#ifdef DUCC0_USE_NANOBIND
+  if (allow_native_ld_a && isPyarr<long double>(a))
+    return Py2_l2error<long double>(a,b,allow_native_ld_b);
+  if (allow_native_ld_a && isPyarr<complex<long double>>(a))
+    return Py2_l2error<complex<long double>>(a,b,allow_native_ld_b);
+#else
   if (isPyarr<long double>(a))
-    return Py2_l2error<long double>(a,b);
+    return Py2_l2error<long double>(a,b,true);
   if (isPyarr<complex<long double>>(a))
-    return Py2_l2error<complex<long double>>(a,b);
+    return Py2_l2error<complex<long double>>(a,b,true);
 #endif
   MR_fail("type matching failed");
   }
+static double Py_l2error(const CNpArr &a, const CNpArr &b)
+  {
+#ifdef DUCC0_USE_NANOBIND
+  return Py_l2error_impl(a,b,false,false);
+#else
+  return Py_l2error_impl(a,b,true,true);
+#endif
+  }
+#ifdef DUCC0_USE_NANOBIND
+static double Py_l2error_native_ld(py::fallback a, py::fallback b)
+  {
+  misc_array_view av(a), bv(b);
+  detail_pybind::native_ld_bridge_scope bridge_scope;
+  return Py_l2error_impl(av.array(), bv.array(), av.is_native(), bv.is_native());
+  }
+#endif
 double Py_l2error_scalar(const complex<double> &a, const complex<double> &b)
   {
   auto res = abs(a-b)/max(abs(a), abs(b));
@@ -620,6 +741,50 @@ template<typename T> static NpArr Py2_make_noncritical(const CNpArr &in, size_t 
   return out;
   }
 
+#ifdef DUCC0_USE_NANOBIND
+static py::object make_native_ld_noncritical_array(const vector<size_t> &shape,
+  native_ld_kind kind, size_t nthreads, bool page_in)
+  {
+  auto shape2=noncritical_shape(shape,
+    kind==native_ld_kind::real ? sizeof(long double)
+                               : sizeof(complex<long double>));
+  const char *dtype=kind==native_ld_kind::real ? "longdouble" : "clongdouble";
+  auto np=py::module_::import_("numpy");
+  auto base=np.attr("empty")(py::cast(shape2), py::arg("dtype")=dtype);
+  if (page_in)
+    {
+    native_ld_output_view view(base, kind);
+    const auto count=py::cast<size_t>(base.attr("size"));
+    if (kind==native_ld_kind::real)
+      page_in_memory(reinterpret_cast<long double *>(view.array().data()),
+        count, nthreads);
+    else
+      page_in_memory(reinterpret_cast<complex<long double> *>(view.array().data()),
+        count, nthreads);
+    }
+  if (shape2==shape) return base;
+  py::list slices;
+  for (size_t i=0; i<shape.size(); ++i)
+    slices.append(py::slice(py::int_(0), py::int_(shape[i]), py::int_(1)));
+  return base.attr("__getitem__")(py::tuple(slices));
+  }
+
+template<typename T> static py::object Py2_make_noncritical_native_ld(
+  py::handle in, size_t nthreads, native_ld_kind kind)
+  {
+  native_ld_input_view inview(in, kind);
+  CNpArr inarr(inview.array());
+  auto result=make_native_ld_noncritical_array(
+    detail_pybind::copy_shape(inarr), kind, nthreads, false);
+  native_ld_output_view outview(result, kind);
+  detail_pybind::native_ld_bridge_scope bridge_scope;
+  auto in2=to_cfmav<T>(inarr);
+  auto out2=to_vfmav<T>(outview.array());
+  mav_apply([](T &v1, const T &v2) { v1=v2; }, nthreads, out2, in2);
+  return result;
+  }
+#endif
+
 static NpArr Py_make_noncritical(const CNpArr &in, size_t nthreads)
   {
   if (isPyarr<float>(in))
@@ -638,6 +803,21 @@ static NpArr Py_make_noncritical(const CNpArr &in, size_t nthreads)
 #endif
   MR_fail("unsupported datatype");
   }
+
+#ifdef DUCC0_USE_NANOBIND
+static py::object Py_make_noncritical_native_ld(py::fallback in, size_t nthreads)
+  {
+  native_ld_kind kind;
+  if (is_native_ld_numpy_array(in, kind))
+    {
+    if (kind==native_ld_kind::real)
+      return Py2_make_noncritical_native_ld<long double>(in, nthreads, kind);
+    return Py2_make_noncritical_native_ld<complex<long double>>(in, nthreads, kind);
+    }
+  auto array=py::cast<CNpArr>(in);
+  return Py_make_noncritical(array, nthreads).cast();
+  }
+#endif
 
 constexpr const char *Py_empty_noncritical_DS = R"""(
 Creates an uninitialized array of the requested shape and data type,
@@ -666,23 +846,42 @@ Returns
 numpy.ndarray (shape, dtype=dtype)
     An uninitialized numpy array with the requested properties
 )""";
-static NpArr Py_empty_noncritical(const vector<size_t> &shape,
+#ifdef DUCC0_USE_NANOBIND
+using PyEmptyResult=py::object;
+static PyEmptyResult Py_empty_array_result(NpArr arr) { return arr.cast(); }
+#else
+using PyEmptyResult=NpArr;
+static PyEmptyResult Py_empty_array_result(NpArr arr) { return arr; }
+#endif
+
+static PyEmptyResult Py_empty_noncritical(const vector<size_t> &shape,
   const py::object &dtype_,size_t nthreads)
   {
   auto dtype = normalizeDtype(dtype_);
   if (isDtype<float>(dtype))
-    return make_noncritical_Pyarr<float>(shape, nthreads);
+    return Py_empty_array_result(
+      make_noncritical_Pyarr<float>(shape, false, nthreads));
   if (isDtype<complex<float>>(dtype))
-    return make_noncritical_Pyarr<complex<float>>(shape, nthreads);
+    return Py_empty_array_result(
+      make_noncritical_Pyarr<complex<float>>(shape, false, nthreads));
   if (isDtype<double>(dtype))
-    return make_noncritical_Pyarr<double>(shape);
+    return Py_empty_array_result(
+      make_noncritical_Pyarr<double>(shape, false, nthreads));
   if (isDtype<complex<double>>(dtype))
-    return make_noncritical_Pyarr<complex<double>>(shape, nthreads);
-#ifndef DUCC0_USE_NANOBIND
+#ifdef DUCC0_USE_NANOBIND
+    return Py_empty_array_result(
+      make_noncritical_Pyarr<complex<double>>(shape, false, nthreads));
+  native_ld_kind kind;
+  if (is_native_ld_numpy_dtype(dtype, kind))
+    return make_native_ld_noncritical_array(shape, kind, nthreads, true);
+#else
+    return make_noncritical_Pyarr<complex<double>>(shape, false, nthreads);
   if (isDtype<long double>(dtype))
-    return make_noncritical_Pyarr<long double>(shape, nthreads);
+    return Py_empty_array_result(
+      make_noncritical_Pyarr<long double>(shape, false, nthreads));
   if (isDtype<complex<long double>>(dtype))
-    return make_noncritical_Pyarr<complex<long double>>(shape, nthreads);
+    return Py_empty_array_result(
+      make_noncritical_Pyarr<complex<long double>>(shape, false, nthreads));
 #endif
   MR_fail("unsupported datatype");
   }
@@ -1919,8 +2118,18 @@ void add_misc(py::module_ &msup)
   auto m2 = m.def_submodule("experimental");
 
   m.def("vdot", Py_vdot, Py_vdot_DS, "a"_a, "b"_a);
+#ifdef DUCC0_USE_NANOBIND
+  if (detail_pybind::native_longdouble_supported &&
+      !detail_pybind::generating_stubs())
+    m.def("vdot", Py_vdot_native_ld, Py_vdot_DS, "a"_a, "b"_a);
+#endif
   m.def("l2error",  Py_l2error, Py_l2error_DS, "a"_a, "b"_a);
   m.def("l2error",  Py_l2error_scalar, Py_l2error_DS, "a"_a, "b"_a);
+#ifdef DUCC0_USE_NANOBIND
+  if (detail_pybind::native_longdouble_supported &&
+      !detail_pybind::generating_stubs())
+    m.def("l2error", Py_l2error_native_ld, Py_l2error_DS, "a"_a, "b"_a);
+#endif
   m.def("special_add_at", Py_special_add_at, Py_special_add_at_DS,
         "a"_a, "axis"_a, "index"_a, "b"_a);
 
@@ -1938,7 +2147,20 @@ void add_misc(py::module_ &msup)
   m.def("transpose", Py_transpose, "in"_a, "out"_a, "nthreads"_a=1);
 
   m.def("make_noncritical", Py_make_noncritical, Py_make_noncritical_DS,"in"_a, "nthreads"_a=1);
-  m.def("empty_noncritical", Py_empty_noncritical, Py_empty_noncritical_DS, "shape"_a, "dtype"_a, "nthreads"_a=1);
+#ifdef DUCC0_USE_NANOBIND
+  if (detail_pybind::native_longdouble_supported &&
+      !detail_pybind::generating_stubs())
+    m.def("make_noncritical", Py_make_noncritical_native_ld,
+      Py_make_noncritical_DS, "in"_a, "nthreads"_a=1);
+#endif
+#ifdef DUCC0_USE_NANOBIND
+  m.def("empty_noncritical", Py_empty_noncritical,
+    py::sig("def empty_noncritical(shape: Sequence[int], dtype: object, nthreads: int = 1) -> Annotated[NDArray, dict(device='cpu')]"),
+    Py_empty_noncritical_DS, "shape"_a, "dtype"_a, "nthreads"_a=1);
+#else
+  m.def("empty_noncritical", Py_empty_noncritical, Py_empty_noncritical_DS,
+    "shape"_a, "dtype"_a, "nthreads"_a=1);
+#endif
 
   py::class_<Py_OofaNoise> (m, "OofaNoise", Py_OofaNoise_DS/*, py::module_local()*/)
     .def(py::init<double, double, double, double, double>(), Py_OofaNoise_init_DS,

@@ -56,8 +56,7 @@ namespace {
 using shape_t = ducc0::fmav_info::shape_t;
 
 // Only instantiate a separate type when native long double has more precision.
-constexpr bool has_extended_longdouble =
-  numeric_limits<long double>::digits>numeric_limits<double>::digits;
+constexpr bool has_extended_longdouble = detail_pybind::native_longdouble_supported;
 using ldbl_t = typename conditional<has_extended_longdouble,
   long double, double>::type;
 
@@ -311,7 +310,7 @@ NpArr dst(const CNpArr &in, int type, const OptAxes &axes_,
     out_, nthreads))
   }
 
-template<typename T> static NpArr c2r_internal(const NpArr &in,
+template<typename T, typename Arr> static NpArr c2r_internal(const Arr &in,
   const OptAxes &axes_, size_t lastsize, bool forward, int inorm,
   const OptNpArr &out_, size_t nthreads, bool allow_overwriting_input)
   {
@@ -327,11 +326,16 @@ template<typename T> static NpArr c2r_internal(const NpArr &in,
   T fct = norm_fct<T>(inorm, aout.shape(), axes);
   if (allow_overwriting_input)
     {
-    auto ain = to_vfmav<complex<T>>(in, "a");
-    {
-    py::gil_scoped_release release;
-    ducc0::c2r_mut(ain, aout, axes, forward, fct, nthreads);
-    }
+    if constexpr (is_same<Arr,NpArr>::value)
+      {
+      auto ain = to_vfmav<complex<T>>(in, "a");
+      {
+      py::gil_scoped_release release;
+      ducc0::c2r_mut(ain, aout, axes, forward, fct, nthreads);
+      }
+      }
+    else
+      throw invalid_argument("allow_overwriting_input requires a writable input");
     }
   else
     {
@@ -493,146 +497,41 @@ NpArr convolve_axis(const CNpArr &in, NpArr &out, size_t axis,
   }
 
 #ifdef DUCC0_USE_NANOBIND
-// Keep the long-double bridge and its registration code away from the regular
-// FFT text path; ELF linkers otherwise place .text.unlikely before .text.
-#if defined(__GNUC__) && !defined(__clang__) && defined(__ELF__)
-#define DUCC0_FFT_COLD [[gnu::cold, gnu::section(".text.ducc0_cold"), gnu::optimize("Os")]]
-#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
-#define DUCC0_FFT_COLD [[gnu::cold, gnu::section(".text.ducc0_cold")]]
-#elif defined(__GNUC__) || defined(__clang__)
-#define DUCC0_FFT_COLD [[gnu::cold]]
-#else
-#define DUCC0_FFT_COLD
-#endif
-enum class native_ld_kind { any, real, complex };
+using detail_pybind::native_ld_kind;
+using detail_pybind::native_ld_input_view;
+using detail_pybind::native_ld_output_view;
 
-struct native_ld_pin
-  {
-  Py_buffer view{};
-  native_ld_pin(py::handle source, bool writable)
-    {
-    int flags=PyBUF_FORMAT | PyBUF_STRIDES | (writable ? PyBUF_WRITABLE : 0);
-    if (PyObject_GetBuffer(source.ptr(), &view, flags)<0)
-      throw py::python_error();
-    }
-  ~native_ld_pin() { PyBuffer_Release(&view); }
-  native_ld_pin(const native_ld_pin &)=delete;
-  native_ld_pin &operator=(const native_ld_pin &)=delete;
-  };
-
-DUCC0_FFT_COLD static NpArr make_native_ld_array_view(py::handle source, const Py_buffer &view,
-  native_ld_kind expected)
-  {
-  if (view.ndim<0 || view.ndim>64 ||
-      (view.ndim>0 && (!view.shape || !view.strides)))
-    throw invalid_argument("invalid long-double buffer dimensions");
-  if (view.suboffsets) for (int i=0; i<view.ndim; ++i)
-    if (view.suboffsets[i]>=0)
-      throw invalid_argument("indirect long-double buffers are unsupported");
-  if (!view.format)
-    throw invalid_argument("long-double buffer does not expose a PEP 3118 format");
-
-  string format(view.format);
-  char prefix=0;
-  if (!format.empty() && string("@=<>!").find(format[0])!=string::npos)
-    { prefix=format[0]; format.erase(0,1); }
-  const uint16_t one=1;
-  const bool little=*reinterpret_cast<const uint8_t *>(&one)==1;
-  if ((prefix=='<' && !little) || ((prefix=='>' || prefix=='!') && little))
-    throw invalid_argument("non-native byte order cannot be used zero-copy");
-
-  const bool is_complex=(format=="Zg");
-  if (!is_complex && format!="g")
-    throw runtime_error("unsupported data type: expected native long double");
-  if ((expected==native_ld_kind::real && is_complex) ||
-      (expected==native_ld_kind::complex && !is_complex))
-    throw runtime_error("incorrect data type for long-double FFT operation");
-  const size_t itemsize=is_complex ? sizeof(clong) : sizeof(long double);
-  const size_t alignment=is_complex ? alignof(clong) : alignof(long double);
-  if (view.itemsize<0 || size_t(view.itemsize)!=itemsize)
-    throw invalid_argument("long-double buffer item size does not match the native type");
-
-  shape_t shape(size_t(view.ndim));
-  vector<int64_t> strides(size_t(view.ndim));
-  size_t count=1;
-  for (int i=0; i<view.ndim; ++i)
-    {
-    if (view.shape[i]<0 || (view.shape[i]>0 &&
-        count>numeric_limits<size_t>::max()/size_t(view.shape[i])))
-      throw invalid_argument("invalid or overflowing long-double buffer shape");
-    shape[size_t(i)]=size_t(view.shape[i]);
-    count*=shape[size_t(i)];
-    const Py_ssize_t stride=view.strides[i];
-    const Py_ssize_t element_stride=stride/Py_ssize_t(itemsize);
-    if (stride%Py_ssize_t(itemsize) ||
-        element_stride<numeric_limits<int64_t>::min() ||
-        element_stride>numeric_limits<int64_t>::max())
-      throw invalid_argument("invalid long-double buffer stride");
-    strides[size_t(i)]=int64_t(element_stride);
-    }
-  if (count && !view.buf)
-    throw invalid_argument("non-empty long-double buffer has a null data pointer");
-  if (view.buf && reinterpret_cast<uintptr_t>(view.buf)%alignment)
-    throw invalid_argument("long-double buffer is not naturally aligned");
-  if (view.len<0 || count>size_t(numeric_limits<Py_ssize_t>::max())/itemsize ||
-      size_t(view.len)!=count*itemsize)
-    throw invalid_argument("long-double buffer length does not match its shape");
-
-  auto dtype=is_complex ? detail_pybind::ducc_clongdouble_dtype
-                        : detail_pybind::ducc_longdouble_dtype;
-  // ndarray_create copies shape and strides into its own metadata.
-  NpArr array(view.buf, shape.size(), shape.data(), source, strides.data(), dtype);
-  MR_assert(array.data()==view.buf, "long-double view changed its buffer pointer");
-  return array;
-  }
-
-class native_ld_view
-  {
-  // Members are destroyed in reverse order: drop the ndarray handle before
-  // releasing the acquired Python buffer.
-  native_ld_pin pin_;
-  NpArr array_;
-
-  public:
-    native_ld_view(py::handle source, bool writable,
-      native_ld_kind expected=native_ld_kind::any)
-      : pin_(source, writable),
-        array_(make_native_ld_array_view(source, pin_.view, expected))
-      {}
-    NpArr &array() { return array_; }
-    const NpArr &array() const { return array_; }
-  };
-
-template<typename T> DUCC0_FFT_COLD static py::object make_native_ld_array(const shape_t &shape)
+template<typename T> static py::object make_native_ld_array(const shape_t &shape)
   {
   auto np=py::module_::import_("numpy");
   const char *dtype=is_same<T,clong>::value ? "clongdouble" : "longdouble";
   return np.attr("empty")(py::cast(shape), py::arg("dtype")=np.attr(dtype));
   }
 
-template<typename T, typename F> DUCC0_FFT_COLD static py::object with_native_ld_output(
+template<typename T, typename F> static py::object with_native_ld_output(
   const py::object &requested, const shape_t &shape, F &&operation)
   {
   py::object result=requested.is_none() ? make_native_ld_array<T>(shape) : requested;
   constexpr auto expected=is_same<T,clong>::value
     ? native_ld_kind::complex : native_ld_kind::real;
-  native_ld_view output(result, true, expected);
+  native_ld_output_view output(result, expected);
   OptNpArr out_arr(output.array());
+  detail_pybind::native_ld_bridge_scope bridge_scope;
   operation(out_arr);
   return result;
   }
 
-template<typename T, typename F> DUCC0_FFT_COLD static py::object transform_native_ld(
+template<typename T, typename F> static py::object transform_native_ld(
   py::handle a, const py::object &out, native_ld_kind kind, F &&transform)
   {
-  native_ld_view input(a, false, kind);
+  native_ld_input_view input(a, kind);
   auto in=CNpArr(input.array());
   return with_native_ld_output<T>(out, detail_pybind::copy_shape(in), [&](const OptNpArr &out_) {
     transform(in, out_);
     });
   }
 
-DUCC0_FFT_COLD static py::object c2c_native_ld(py::object a, const OptAxes &axes,
+static py::object c2c_native_ld(py::fallback a, const OptAxes &axes,
   bool forward, int inorm, py::object out, size_t nthreads)
   {
   return transform_native_ld<clong>(a, out, native_ld_kind::any,
@@ -644,10 +543,10 @@ DUCC0_FFT_COLD static py::object c2c_native_ld(py::object a, const OptAxes &axes
     });
   }
 
-DUCC0_FFT_COLD static py::object r2c_native_ld(py::object a, const OptAxes &axes,
+static py::object r2c_native_ld(py::fallback a, const OptAxes &axes,
   bool forward, int inorm, py::object out, size_t nthreads)
   {
-  native_ld_view input(a, false, native_ld_kind::real);
+  native_ld_input_view input(a, native_ld_kind::real);
   CNpArr in(input.array());
   auto dims=detail_pybind::copy_shape(in);
   auto transform_axes=makeaxes(in, axes);
@@ -657,13 +556,13 @@ DUCC0_FFT_COLD static py::object r2c_native_ld(py::object a, const OptAxes &axes
     });
   }
 
-DUCC0_FFT_COLD static py::object c2r_native_ld(py::object a, const OptAxes &axes,
-  size_t lastsize, bool forward, int inorm, py::object out, size_t nthreads,
-  bool allow_overwriting_input)
+template<bool Writable> static py::object c2r_native_ld_impl(py::handle a,
+  const OptAxes &axes, size_t lastsize, bool forward, int inorm,
+  py::object out, size_t nthreads, bool allow_overwriting_input)
   {
-  native_ld_view input(a, allow_overwriting_input,
-    native_ld_kind::complex);
-  auto in=input.array();
+  using InputView=detail_pybind::native_ld_view<Writable>;
+  InputView input(a, native_ld_kind::complex);
+  auto &in=input.array();
   auto transform_axes=makeaxes(CNpArr(in), axes);
   auto dims=detail_pybind::copy_shape(CNpArr(in));
   const size_t axis=transform_axes.back();
@@ -676,10 +575,21 @@ DUCC0_FFT_COLD static py::object c2r_native_ld(py::object a, const OptAxes &axes
     });
   }
 
+static py::object c2r_native_ld(py::fallback a, const OptAxes &axes,
+  size_t lastsize, bool forward, int inorm, py::object out, size_t nthreads,
+  bool allow_overwriting_input)
+  {
+  if (allow_overwriting_input)
+    return c2r_native_ld_impl<true>(a, axes, lastsize, forward, inorm,
+      out, nthreads, true);
+  return c2r_native_ld_impl<false>(a, axes, lastsize, forward, inorm,
+    out, nthreads, false);
+  }
+
 using native_real_transform = NpArr (*)(const CNpArr &, const OptAxes &, int,
   const OptNpArr &, size_t);
-template<native_real_transform transform> DUCC0_FFT_COLD static py::object real_transform_native_ld(
-  py::object a, const OptAxes &axes, int inorm, py::object out, size_t nthreads)
+template<native_real_transform transform> static py::object real_transform_native_ld(
+  py::fallback a, const OptAxes &axes, int inorm, py::object out, size_t nthreads)
   {
   return transform_native_ld<ldbl_t>(a, out, native_ld_kind::real,
     [&](const CNpArr &in, const OptNpArr &out_) {
@@ -689,8 +599,8 @@ template<native_real_transform transform> DUCC0_FFT_COLD static py::object real_
 
 using native_fftpack_transform = NpArr (*)(const CNpArr &, const OptAxes &,
   bool, bool, int, const OptNpArr &, size_t);
-template<native_fftpack_transform transform> DUCC0_FFT_COLD static py::object fftpack_native_ld(
-  py::object a, const OptAxes &axes, bool real2hermitian, bool forward,
+template<native_fftpack_transform transform> static py::object fftpack_native_ld(
+  py::fallback a, const OptAxes &axes, bool real2hermitian, bool forward,
   int inorm, py::object out, size_t nthreads)
   {
   return transform_native_ld<ldbl_t>(a, out, native_ld_kind::real,
@@ -701,8 +611,8 @@ template<native_fftpack_transform transform> DUCC0_FFT_COLD static py::object ff
 
 using native_fftw_transform = NpArr (*)(const CNpArr &, const OptAxes &, bool,
   int, const OptNpArr &, size_t);
-template<native_fftw_transform transform> DUCC0_FFT_COLD static py::object fftw_native_ld(
-  py::object a, const OptAxes &axes, bool forward, int inorm, py::object out,
+template<native_fftw_transform transform> static py::object fftw_native_ld(
+  py::fallback a, const OptAxes &axes, bool forward, int inorm, py::object out,
   size_t nthreads)
   {
   return transform_native_ld<ldbl_t>(a, out, native_ld_kind::real,
@@ -713,8 +623,8 @@ template<native_fftw_transform transform> DUCC0_FFT_COLD static py::object fftw_
 
 using native_dcst_transform = NpArr (*)(const CNpArr &, const OptAxes &, int,
   int, const OptNpArr &, size_t);
-template<native_dcst_transform transform> DUCC0_FFT_COLD static py::object dcst_native_ld(
-  py::object a, int type, const OptAxes &axes, int inorm, py::object out,
+template<native_dcst_transform transform> static py::object dcst_native_ld(
+  py::fallback a, int type, const OptAxes &axes, int inorm, py::object out,
   size_t nthreads)
   {
   return transform_native_ld<ldbl_t>(a, out, native_ld_kind::real,
@@ -723,14 +633,15 @@ template<native_dcst_transform transform> DUCC0_FFT_COLD static py::object dcst_
     });
   }
 
-DUCC0_FFT_COLD static py::object convolve_axis_native_ld(py::object in_, py::object out_,
-  size_t axis, py::object kernel_, size_t nthreads)
+static py::object convolve_axis_native_ld(py::fallback in_, py::object out_,
+  size_t axis, py::fallback kernel_, size_t nthreads)
   {
-  native_ld_view input(in_, false);
-  auto kind=isPyarr<clong>(CNpArr(input.array()))
+  native_ld_input_view input(in_);
+  auto kind=input.array().dtype()==detail_pybind::ducc_clongdouble_dtype
     ? native_ld_kind::complex : native_ld_kind::real;
-  native_ld_view output(out_, true, kind);
-  native_ld_view kernel(kernel_, false, kind);
+  native_ld_output_view output(out_, kind);
+  native_ld_input_view kernel(kernel_, kind);
+  detail_pybind::native_ld_bridge_scope bridge_scope;
   if (kind==native_ld_kind::complex)
     (void)convolve_axis_internal_c<ldbl_t>(CNpArr(input.array()), output.array(), axis,
       CNpArr(kernel.array()), nthreads);
@@ -1208,7 +1119,7 @@ out : int
 )""";
 
 #ifdef DUCC0_USE_NANOBIND
-DUCC0_FFT_COLD static void add_native_ld_fallbacks(py::module_ &m)
+static void add_native_ld_fallbacks(py::module_ &m)
   {
   using namespace py::literals;
   auto None=py::none();
@@ -1249,7 +1160,6 @@ DUCC0_FFT_COLD static void add_native_ld_fallbacks(py::module_ &m)
     "in"_a, "out"_a, "axis"_a, "kernel"_a, "nthreads"_a=1);
   }
 #endif
-#undef DUCC0_FFT_COLD
 
 } // unnamed namespace
 
@@ -1286,10 +1196,8 @@ void add_fft(py::module_ &msup)
     "axis"_a, "kernel"_a, "nthreads"_a=1);
 
 #ifdef DUCC0_USE_NANOBIND
-  // Keep the private object fallbacks out of nanobind-generated signatures.
-  const char *stubgen=std::getenv("NB_STUBGEN");
-  const bool generating_stubs=stubgen && stubgen[0]=='1';
-  if (has_extended_longdouble && !generating_stubs)
+  // Keep the private fallbacks out of nanobind-generated signatures.
+  if (has_extended_longdouble && !detail_pybind::generating_stubs())
     add_native_ld_fallbacks(m);
 #endif
 

@@ -21,9 +21,7 @@ from ducc0.misc import l2error as l2error
 import numpy as np
 import pytest
 from numpy.testing import assert_, assert_allclose
-import ctypes
-import platform
-import sys
+from _longdouble_support import HAS_NATIVE_LONGDOUBLE
 
 pmp = pytest.mark.parametrize
 
@@ -37,18 +35,6 @@ len1D = list(range(1, 256)) + list(range(1700, 2048)) + [137*137]
 
 
 def _assert_close(a, b, epsilon):
-    ext_dtypes = (np.dtype(np.longdouble), np.dtype(np.clongdouble))
-    if np.asarray(a).dtype in ext_dtypes or np.asarray(b).dtype in ext_dtypes:
-        # misc.l2error currently cannot consume DUCC-private nanobind views.
-        # Keep its normalized L2 metric and accumulate in native long double.
-        aa, bb = np.asarray(a), np.asarray(b)
-        aa2 = np.sum(np.abs(aa)**2, dtype=np.longdouble)
-        bb2 = np.sum(np.abs(bb)**2, dtype=np.longdouble)
-        delta2 = np.sum(np.abs(aa-bb)**2, dtype=np.longdouble)
-        denominator = max(aa2, bb2)
-        err = np.longdouble(0) if denominator == 0 else np.sqrt(delta2/denominator)
-        assert_allclose(float(err), 0, atol=epsilon)
-        return
     assert_allclose(l2error(a, b), 0, atol=epsilon)
 
 
@@ -102,25 +88,7 @@ ctype = {np.float32: np.complex64,
          np.longdouble: np.clongdouble}
 
 
-def _native_buffer_format(dtype):
-    fmt = memoryview(np.empty(1, dtype=dtype)).format
-    if fmt and fmt[0] in "@=<>!":
-        prefix, fmt = fmt[0], fmt[1:]
-        little = sys.byteorder == "little"
-        if (prefix == "<" and not little) or (prefix in ">!" and little):
-            return None
-    return fmt
-
-
-on_ppc64le = "ppc64le" in platform.machine().lower()
-true_long_double = (
-    np.finfo(np.longdouble).nmant > np.finfo(np.float64).nmant
-    and np.dtype(np.longdouble).itemsize == ctypes.sizeof(ctypes.c_longdouble)
-    and np.dtype(np.clongdouble).itemsize == 2 * ctypes.sizeof(ctypes.c_longdouble)
-    and _native_buffer_format(np.longdouble) == "g"
-    and _native_buffer_format(np.clongdouble) == "Zg"
-    and not on_ppc64le
-)
+true_long_double = HAS_NATIVE_LONGDOUBLE
 dtypes = [np.float32, np.float64]
 if true_long_double:
     dtypes += [np.longdouble]
@@ -136,12 +104,26 @@ def test_native_longdouble_buffers():
 
     spectrum = np.empty(real.size // 2 + 1, dtype=np.clongdouble)
     assert fft.r2c(real, out=spectrum) is spectrum
+    assert isinstance(spectrum, np.ndarray)
+    assert spectrum.dtype == np.dtype(np.clongdouble)
+    assert memoryview(spectrum).format == "Zg"
+    spectrum.setflags(write=False)
     restored_base = np.empty(real.size * 2, dtype=np.longdouble)
     restored = restored_base[::2]
     assert fft.c2r(spectrum, lastsize=real.size, forward=False, inorm=2,
                    out=restored) is restored
     assert restored.dtype == np.dtype(np.longdouble)
     _assert_close(real, restored, 1e-15)
+
+    reversed_real = real_base[::-2]
+    reversed_real.setflags(write=False)
+    reversed_out = np.empty(real.size // 2 + 1, dtype=np.clongdouble)[::-1]
+    assert fft.r2c(reversed_real, out=reversed_out) is reversed_out
+    assert_allclose(reversed_out, np.fft.rfft(reversed_real), atol=1e-15)
+    readonly_out = np.empty(real.size // 2 + 1, dtype=np.clongdouble)
+    readonly_out.setflags(write=False)
+    with pytest.raises((BufferError, ValueError)):
+        fft.r2c(real, out=readonly_out)
 
     inplace_buf = np.empty(real.size // 2 + 1, dtype=np.clongdouble)
     inplace_real = inplace_buf.view(np.longdouble)[:real.size]
@@ -167,6 +149,7 @@ def test_native_longdouble_buffers():
     _assert_close(complex_input, inplace, 1e-15)
 
     c2c_real = fft.c2c(real)
+    assert type(c2c_real) is np.ndarray
     assert c2c_real.dtype == np.dtype(np.clongdouble)
     _assert_close(fft.genuine_fht(real), c2c_real.real-c2c_real.imag, 1e-15)
     _assert_close(fft.genuine_hartley(real), c2c_real.real+c2c_real.imag, 1e-15)
@@ -196,6 +179,21 @@ def test_native_longdouble_buffers():
     if not foreign.dtype.isnative:
         with pytest.raises((TypeError, ValueError, RuntimeError)):
             fft.r2c(foreign)
+
+
+@pmp("dtype", (np.float32, np.float64, np.complex64, np.complex128))
+def test_native_longdouble_fallback_keeps_ordinary_fft_overloads(dtype):
+    values = np.array([0.25, -0.5, 0.75, 1.0], dtype=np.float64)
+    if np.issubdtype(dtype, np.complexfloating):
+        values = values + 1j * values[::-1]
+    source = values.astype(dtype)[::-1]
+    expected_dtype = (np.complex64 if dtype in (np.float32, np.complex64)
+                      else np.complex128)
+    assert fft.c2c(source).dtype == np.dtype(expected_dtype)
+    if ducc0.__wrapper__ == "nanobind":
+        # Nanobind's ndarray conversion accepts ordinary PEP 3118 buffers.
+        # The native-long-double fallback must not intercept these inputs.
+        assert fft.c2c(memoryview(source)).dtype == np.dtype(expected_dtype)
 
 
 @pmp("len", len1D)

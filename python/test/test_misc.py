@@ -15,13 +15,97 @@
 # Copyright(C) 2025 Philipp Arras
 
 
+import gc
+
 import ducc0
 import numpy as np
 import pytest
 from ducc0.misc import special_add_at
 from numpy.testing import assert_allclose
+from _longdouble_support import HAS_NATIVE_LONGDOUBLE
 
 pmp = pytest.mark.parametrize
+
+@pytest.mark.skipif(not HAS_NATIVE_LONGDOUBLE,
+                    reason="native long-double buffers unavailable or PPC safeguard")
+def test_native_longdouble_misc():
+    real = np.array([1, 2, 3], dtype=np.longdouble)
+    real_other = np.array([2, 4, 6], dtype=np.longdouble)
+    complex_ = np.array([1+2j, 2-1j, 4+0.5j], dtype=np.clongdouble)
+    complex_other = np.array([2+1j, 1+0.5j, 3-2j], dtype=np.clongdouble)
+
+    assert_allclose(ducc0.misc.vdot(real, real_other), np.vdot(real, real_other))
+    assert_allclose(ducc0.misc.vdot(complex_, complex_other),
+                    np.vdot(complex_, complex_other))
+    real64 = real_other.astype(np.float64)
+    assert_allclose(ducc0.misc.vdot(real, real64), np.vdot(real, real64))
+    assert_allclose(ducc0.misc.vdot(real64, real), np.vdot(real64, real))
+    assert_allclose(ducc0.misc.l2error(real, real_other), 0.5)
+    assert_allclose(ducc0.misc.l2error(real, real64), 0.5)
+    assert_allclose(ducc0.misc.l2error(real64, real), 0.5)
+
+    complex128 = complex_other.astype(np.complex128)
+    assert_allclose(ducc0.misc.vdot(complex_, complex128),
+                    np.vdot(complex_, complex128))
+    assert_allclose(ducc0.misc.vdot(complex128, complex_),
+                    np.vdot(complex128, complex_))
+    mixed_complex_l2 = np.sqrt(
+        np.sum(np.abs(complex_ - complex128)**2) /
+        max(np.sum(np.abs(complex_)**2), np.sum(np.abs(complex128)**2)))
+    assert_allclose(ducc0.misc.l2error(complex_, complex128), mixed_complex_l2)
+    assert_allclose(ducc0.misc.l2error(complex128, complex_), mixed_complex_l2)
+    assert_allclose(ducc0.misc.l2error(complex_, complex_other),
+                    np.sqrt(np.sum(np.abs(complex_-complex_other)**2) /
+                            max(np.sum(np.abs(complex_)**2),
+                                np.sum(np.abs(complex_other)**2))))
+
+    for dtype, columns in ((np.longdouble, 512), (np.clongdouble, 256)):
+        arr = np.arange(2*columns, dtype=np.longdouble).reshape(2, columns)
+        if dtype is np.clongdouble:
+            arr = arr.astype(np.clongdouble) * (1+2j)
+        source = arr.copy()
+        copied = ducc0.misc.make_noncritical(source, nthreads=2)
+        assert type(copied) is np.ndarray
+        assert copied.dtype == arr.dtype
+        assert memoryview(copied).format == memoryview(arr).format
+        assert np.array_equal(copied, source)
+        assert not np.shares_memory(copied, source)
+        assert copied.strides[0] % 4096 != 0
+        del source
+        gc.collect()
+        assert np.array_equal(copied, arr)
+
+
+@pmp("dtype", (np.float32, np.float64, np.complex64, np.complex128))
+def test_native_longdouble_fallback_keeps_ordinary_misc_overloads(dtype):
+    values = np.array([0.25, -0.5, 0.75], dtype=np.float64)
+    if np.issubdtype(dtype, np.complexfloating):
+        values = values + 1j * values[::-1]
+    a = values.astype(dtype)
+    b = (values[::-1] * 0.5).astype(dtype)
+    assert_allclose(ducc0.misc.vdot(a, b), np.vdot(a, b))
+    expected = np.sqrt(
+        np.sum(np.abs(a-b)**2) / max(np.sum(np.abs(a)**2), np.sum(np.abs(b)**2)))
+    assert_allclose(ducc0.misc.l2error(a, b), expected)
+    if ducc0.__wrapper__ == "nanobind":
+        assert_allclose(ducc0.misc.vdot(memoryview(a), memoryview(b)), np.vdot(a, b))
+        assert_allclose(ducc0.misc.l2error(memoryview(a), memoryview(b)), expected)
+
+
+def test_empty_noncritical_dtype_and_layout():
+    dtypes = [np.float32, np.float64, np.complex64, np.complex128]
+    if HAS_NATIVE_LONGDOUBLE:
+        dtypes.extend((np.longdouble, np.clongdouble))
+
+    for dtype in dtypes:
+        columns = 4096 // np.dtype(dtype).itemsize
+        shape = (2, columns)
+        arr = ducc0.misc.empty_noncritical(shape, dtype, nthreads=2)
+        assert type(arr) is np.ndarray
+        assert arr.shape == shape
+        assert arr.dtype == np.dtype(dtype)
+        assert memoryview(arr).format == memoryview(np.empty(1, dtype=dtype)).format
+        assert arr.strides[0] % 4096 != 0
 
 
 @pmp("shape", ([43], [654, 23], [32, 3, 11]))

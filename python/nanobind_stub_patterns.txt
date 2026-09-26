@@ -1,9 +1,16 @@
-# Keep signatures valid Python where the runtime exposes names/orderings that
-# cannot be written directly in a Python function definition.
+# Remaining rules preserve existing runtime bindings that the generated
+# signatures cannot represent directly.
+# good_size is registered through the raw PyMethodDef API.
+^ducc0\.fft\.good_size$:
+    def good_size(n: int, real: bool = False, /) -> int:
+        \doc
+
+# The runtime keeps the public parameter name "in", which is a Python keyword.
 ^ducc0\.fft\.convolve_axis$:
     def convolve_axis(in_: Annotated[NDArray, dict(device='cpu', writable=False)], /, out: Annotated[NDArray, dict(device='cpu')], axis: int, kernel: Annotated[NDArray, dict(device='cpu', writable=False)], nthreads: int = 1) -> Annotated[NDArray, dict(device='cpu')]:
         \doc
 
+# These misc bindings also preserve the reserved runtime parameter name "in".
 ^ducc0\.misc\.transpose$:
     def transpose(in_: Annotated[NDArray, dict(device='cpu', writable=False)], /, out: Annotated[NDArray, dict(device='cpu')], nthreads: int = 1) -> Annotated[NDArray, dict(device='cpu')]: ...
 
@@ -11,6 +18,7 @@
     def make_noncritical(in_: Annotated[NDArray, dict(device='cpu', writable=False)], /, nthreads: int = 1) -> Annotated[NDArray, dict(device='cpu')]:
         \doc
 
+# PointingProvider has two existing positional/keyword forms for its output.
 ^ducc0\.pointingprovider\.PointingProvider\.get_rotated_quaternions$:
     \from typing import overload
     @overload
@@ -22,7 +30,8 @@
     @overload
     def get_rotated_quaternions(self, t0: float, freq: float, rot: Annotated[NDArray, dict(device='cpu', writable=False)], *, rot_left: bool = True, out: Annotated[NDArray, dict(device='cpu')]) -> Annotated[NDArray, dict(device='cpu')]: ...
 
-^ducc0\.totalconvolve\.ConvolverPlan(_f)?\.__init__$:
+# These constructor patterns preserve existing positional and keyword overloads.
+^ducc0\.totalconvolve\.ConvolverPlan(?:_f)?\.__init__$:
     \from typing import overload
     @overload
     def __init__(self, lmax: int, kmax: int, *, npoints: int = 1000000000, sigma_min: float = 1.1, sigma_max: float = 2.6, epsilon: float, nthreads: int = 0) -> None:
@@ -32,7 +41,7 @@
     @overload
     def __init__(self, lmax: int, kmax: int, sigma: float, epsilon: float, nthreads: int = 0) -> None: ...
 
-^ducc0\.totalconvolve\.Interpolator(_f)?\.__init__$:
+^ducc0\.totalconvolve\.Interpolator(?:_f)?\.__init__$:
     \from typing import overload
     @overload
     def __init__(self, sky: Annotated[NDArray, dict(device='cpu', writable=False)], beam: Annotated[NDArray, dict(device='cpu', writable=False)], separate: bool, lmax: int, kmax: int, *, npoints: int = 1000000000, sigma_min: float = 1.1, sigma_max: float = 2.6, epsilon: float, nthreads: int = 0) -> None:
@@ -49,6 +58,8 @@
     @overload
     def __init__(self, lmax: int, kmax: int, ncomp: int, epsilon: float, ofactor: float = 1.5, nthreads: int = 0) -> None: ...
 
+# The runtime overloads retain positional compatibility despite optional
+# parameters preceding required parameters in the C++ binding declarations.
 ^ducc0\.wgridder\.ms2dirty$:
     \from typing import overload
     @overload

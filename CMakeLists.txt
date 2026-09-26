@@ -30,12 +30,6 @@ set(PYMOD_SOURCES
     python/pointingprovider_pymod.cc python/ducc.cc)
 
 if (DEFINED ENV{DUCC0_USE_NANOBIND})
-    list(APPEND CXX_SOURCES src/ducc0/fft/fft_inst_ld.cc)
-    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        # Keep nanobind-only long-double kernels out of the ordinary FFT LTO unit.
-        set_source_files_properties(src/ducc0/fft/fft_inst_ld.cc
-            PROPERTIES COMPILE_OPTIONS "-fno-lto")
-    endif()
     execute_process(
             COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
             OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -58,15 +52,42 @@ if (DEFINED ENV{DUCC0_USE_NANOBIND})
         stubs/ducc0/totalconvolve.pyi
         stubs/ducc0/wgridder/__init__.pyi
         stubs/ducc0/wgridder/experimental.pyi)
-    nanobind_add_stub(${PKGNAME}_stub
-        MODULE ${PKGNAME}
-        PYTHON_PATH $<TARGET_FILE_DIR:${PKGNAME}>
-        DEPENDS ${PKGNAME}
-        RECURSIVE
-        OUTPUT_PATH stubs
-        OUTPUT ${DUCC0_STUB_OUTPUTS}
-        PATTERN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/python/nanobind_stub_patterns.txt"
-        MARKER_FILE stubs/ducc0/py.typed)
+    if (EXISTS "${NB_DIR}/src/stubgen.py")
+        set(DUCC0_NB_STUBGEN "${NB_DIR}/src/stubgen.py")
+    elseif (EXISTS "${NB_DIR}/stubgen.py")
+        set(DUCC0_NB_STUBGEN "${NB_DIR}/stubgen.py")
+    else ()
+        message(FATAL_ERROR "Could not locate nanobind's stubgen.py")
+    endif ()
+
+    # nanobind 2.9.x does not set NB_STUBGEN before importing the extension.
+    # Set it in the build command so private long-double overloads stay hidden.
+    set(DUCC0_STUBGEN_ENV "NB_STUBGEN=1")
+    set(DUCC0_STUBGEN_PYTHON "${Python_EXECUTABLE}")
+    if (NOT WIN32)
+        nanobind_sanitizer_preload_env(DUCC0_STUBGEN_SANITIZER_ENV ${PKGNAME})
+        if (DUCC0_STUBGEN_SANITIZER_ENV)
+            nanobind_resolve_python_path()
+            set(DUCC0_STUBGEN_ENV ${DUCC0_STUBGEN_SANITIZER_ENV} "NB_STUBGEN=1")
+            if (DUCC0_STUBGEN_SANITIZER_ENV MATCHES asan)
+                list(APPEND DUCC0_STUBGEN_ENV "ASAN_OPTIONS=detect_leaks=0")
+            endif ()
+            set(DUCC0_STUBGEN_PYTHON "${NB_PY_PATH}")
+        endif ()
+    endif ()
+    add_custom_command(
+        OUTPUT ${DUCC0_STUB_OUTPUTS} stubs/ducc0/py.typed
+        COMMAND ${CMAKE_COMMAND} -E env ${DUCC0_STUBGEN_ENV}
+            "${DUCC0_STUBGEN_PYTHON}" "${DUCC0_NB_STUBGEN}"
+            -q -r -i "$<TARGET_FILE_DIR:${PKGNAME}>"
+            -p "${CMAKE_CURRENT_SOURCE_DIR}/python/nanobind_stub_patterns.txt"
+            -m ${PKGNAME} -O stubs -M stubs/ducc0/py.typed
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+        DEPENDS ${PKGNAME} "${DUCC0_NB_STUBGEN}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/python/nanobind_stub_patterns.txt"
+        VERBATIM)
+    add_custom_target(${PKGNAME}_stub ALL
+        DEPENDS ${DUCC0_STUB_OUTPUTS} stubs/ducc0/py.typed)
     install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/stubs/ducc0"
         DESTINATION .)
 else()

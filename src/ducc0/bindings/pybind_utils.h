@@ -67,7 +67,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <pybind11/functional.h>
 #endif
 #include <cstddef>
+#include <cstdint>
 #include <complex>
+#include <cstdlib>
+#include <limits>
+#include <stdexcept>
 #include <string>
 #include <array>
 #include <vector>
@@ -112,15 +116,155 @@ template<typename T> using CNpArrT = py::array_t<T>;
 using OptNpArr = optional<NpArr>;
 using OptCNpArr = optional<CNpArr>;
 
+// PPC64LE's long-double representation is not covered by the bridge's formats.
+#if defined(DUCC0_USE_NANOBIND) && \
+    (defined(__powerpc64__) || defined(__ppc64__)) && \
+    defined(__BYTE_ORDER__) && defined(__ORDER_LITTLE_ENDIAN__) && \
+    (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+inline constexpr bool native_longdouble_supported = false;
+#else
+inline constexpr bool native_longdouble_supported =
+  numeric_limits<long double>::digits>numeric_limits<double>::digits;
+#endif
+
 #ifdef DUCC0_USE_NANOBIND
-// These are DUCC-private sentinels, never public DLPack dtypes. Their reserved
-// codes distinguish native C++ long double from complex<long double> without
-// claiming that either representation is IEEE binary128.
+inline bool generating_stubs() noexcept
+  {
+  const char *stubgen=std::getenv("NB_STUBGEN");
+  return stubgen && stubgen[0]=='1';
+  }
+
+// Marker dtypes are usable only while a validated bridge view is alive.
+inline thread_local unsigned native_ld_bridge_depth=0;
+class native_ld_bridge_scope
+  {
+  public:
+    native_ld_bridge_scope() { ++native_ld_bridge_depth; }
+    ~native_ld_bridge_scope() { --native_ld_bridge_depth; }
+    native_ld_bridge_scope(const native_ld_bridge_scope &)=delete;
+    native_ld_bridge_scope &operator=(const native_ld_bridge_scope &)=delete;
+  };
+
+// Codes 254/255 are opaque DUCC-private tags, not valid public DLPack dtype
+// representations. bits=8 is a nonzero placeholder, not an element-size
+// claim. The actual representation is validated through PEP 3118 before
+// tagging. Tagged arrays must never be returned, exported through DLPack, or
+// exposed through the Python buffer protocol.
 inline constexpr py::dlpack::dtype ducc_longdouble_dtype{254, 8, 1};
 inline constexpr py::dlpack::dtype ducc_clongdouble_dtype{255, 8, 1};
 template<typename T> inline constexpr bool is_native_longdouble_type =
   is_same<typename remove_cv<T>::type, long double>::value ||
   is_same<typename remove_cv<T>::type, complex<long double>>::value;
+
+enum class native_ld_kind { any, real, complex };
+
+template<bool Writable> struct native_ld_pin
+  {
+  Py_buffer view{};
+  explicit native_ld_pin(py::handle source)
+    {
+    constexpr int flags=PyBUF_FORMAT | PyBUF_STRIDES |
+      (Writable ? PyBUF_WRITABLE : 0);
+    if (PyObject_GetBuffer(source.ptr(), &view, flags)<0)
+      throw py::python_error();
+    }
+  ~native_ld_pin() { PyBuffer_Release(&view); }
+  native_ld_pin(const native_ld_pin &)=delete;
+  native_ld_pin &operator=(const native_ld_pin &)=delete;
+  };
+
+template<bool Writable>
+using native_ld_array = conditional_t<Writable, NpArr, CNpArr>;
+
+template<bool Writable>
+static native_ld_array<Writable> make_native_ld_array_view(
+  py::handle source, const Py_buffer &view, native_ld_kind expected)
+  {
+  using Array=native_ld_array<Writable>;
+  if (view.ndim<0 || view.ndim>64 ||
+      (view.ndim>0 && (!view.shape || !view.strides)))
+    throw invalid_argument("invalid long-double buffer dimensions");
+  if (view.suboffsets) for (int i=0; i<view.ndim; ++i)
+    if (view.suboffsets[i]>=0)
+      throw invalid_argument("indirect long-double buffers are unsupported");
+  if (!view.format)
+    throw invalid_argument("long-double buffer does not expose a PEP 3118 format");
+
+  string format(view.format);
+  char prefix=0;
+  if (!format.empty() && string("@=<>!").find(format[0])!=string::npos)
+    { prefix=format[0]; format.erase(0,1); }
+  const uint16_t one=1;
+  const bool little=*reinterpret_cast<const uint8_t *>(&one)==1;
+  if ((prefix=='<' && !little) || ((prefix=='>' || prefix=='!') && little))
+    throw invalid_argument("non-native byte order cannot be used zero-copy");
+
+  const bool is_complex=(format=="Zg");
+  if (!is_complex && format!="g")
+    throw runtime_error("unsupported data type: expected native long double");
+  if ((expected==native_ld_kind::real && is_complex) ||
+      (expected==native_ld_kind::complex && !is_complex))
+    throw runtime_error("incorrect data type for native long-double operation");
+  const size_t itemsize=is_complex ? sizeof(complex<long double>)
+                                   : sizeof(long double);
+  const size_t alignment=is_complex ? alignof(complex<long double>)
+                                    : alignof(long double);
+  if (view.itemsize<0 || size_t(view.itemsize)!=itemsize)
+    throw invalid_argument("long-double buffer item size does not match the native type");
+
+  shape_t shape(size_t(view.ndim));
+  vector<int64_t> strides(size_t(view.ndim));
+  size_t count=1;
+  for (int i=0; i<view.ndim; ++i)
+    {
+    if (view.shape[i]<0 || (view.shape[i]>0 &&
+        count>numeric_limits<size_t>::max()/size_t(view.shape[i])))
+      throw invalid_argument("invalid or overflowing long-double buffer shape");
+    shape[size_t(i)]=size_t(view.shape[i]);
+    count*=shape[size_t(i)];
+    const Py_ssize_t stride=view.strides[i];
+    const Py_ssize_t element_stride=stride/Py_ssize_t(itemsize);
+    if (stride%Py_ssize_t(itemsize) ||
+        element_stride<numeric_limits<int64_t>::min() ||
+        element_stride>numeric_limits<int64_t>::max())
+      throw invalid_argument("invalid long-double buffer stride");
+    strides[size_t(i)]=int64_t(element_stride);
+    }
+  if (count && !view.buf)
+    throw invalid_argument("non-empty long-double buffer has a null data pointer");
+  if (view.buf && reinterpret_cast<uintptr_t>(view.buf)%alignment)
+    throw invalid_argument("long-double buffer is not naturally aligned");
+  if (view.len<0 || count>size_t(numeric_limits<Py_ssize_t>::max())/itemsize ||
+      size_t(view.len)!=count*itemsize)
+    throw invalid_argument("long-double buffer length does not match its shape");
+
+  auto dtype=is_complex ? ducc_clongdouble_dtype : ducc_longdouble_dtype;
+  // ndarray_create copies shape and strides into its own metadata.
+  Array array(view.buf, shape.size(), shape.data(), source, strides.data(), dtype);
+  MR_assert(array.data()==view.buf, "long-double view changed its buffer pointer");
+  return array;
+  }
+
+template<bool Writable> class native_ld_view
+  {
+  using Array=native_ld_array<Writable>;
+  // Reverse destruction drops the ndarray handle before releasing the buffer.
+  native_ld_pin<Writable> pin_;
+  Array array_;
+
+  public:
+    explicit native_ld_view(py::handle source,
+      native_ld_kind expected=native_ld_kind::any)
+      : pin_(source),
+        array_(make_native_ld_array_view<Writable>(source, pin_.view, expected))
+      {}
+    Array &array() { return array_; }
+    const Array &array() const { return array_; }
+  };
+
+using native_ld_input_view=native_ld_view<false>;
+using native_ld_output_view=native_ld_view<true>;
+
 #endif
 
 static inline string makeSpec(const string &name)
@@ -131,9 +275,9 @@ template<typename T> bool isPyarr(const CNpArr &obj)
   {
   using U = typename remove_cv<T>::type;
   if constexpr (is_same<U, long double>::value)
-    return obj.dtype()==ducc_longdouble_dtype;
+    return native_ld_bridge_depth && obj.dtype()==ducc_longdouble_dtype;
   else if constexpr (is_same<U, complex<long double>>::value)
-    return obj.dtype()==ducc_clongdouble_dtype;
+    return native_ld_bridge_depth && obj.dtype()==ducc_clongdouble_dtype;
   else
     return obj.dtype()==py::dtype<T>();
   }
@@ -268,7 +412,12 @@ template<typename T> vfmav<T> to_vfmav(const NpArr &obj, const string &name="")
 template<typename T, size_t ndim> vmav<T,ndim> to_vmav(const NpArr &obj,
   const string &name="")
   { return vmav<T,ndim>(to_vfmav<T>(obj, name)); }
+#ifdef DUCC0_USE_NANOBIND
+template<typename T, size_t ndim,
+  typename = enable_if_t<!is_native_longdouble_type<T>>>
+#else
 template<typename T, size_t ndim>
+#endif
 vmav<T,ndim> to_vmav(const NpArrT<T> &obj,
   const string &name="")
   { return to_vmav<T,ndim>(NpArr(obj), name); }
@@ -329,6 +478,10 @@ template<typename T> auto make_Pyarr_and_vfmav
 
 template<typename T> NpArr make_noncritical_Pyarr(const shape_t &shape, bool zero=false, size_t nthreads=1)
   {
+#ifdef DUCC0_USE_NANOBIND
+  static_assert(!is_native_longdouble_type<T>,
+    "native long-double arrays must use the validated PEP 3118 bridge");
+#endif
   auto ndim = shape.size();
   if (ndim==1) return make_Pyarr<T>(shape);
   auto shape2 = noncritical_shape(shape, sizeof(T));
