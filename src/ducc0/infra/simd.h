@@ -55,6 +55,23 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef DUCC0_SIMD_H
 #define DUCC0_SIMD_H
 
+// Runtime-dispatch profiles use separate SIMD implementation namespaces.
+#if defined(DUCC0_X86_64_LEVEL)
+#  if DUCC0_X86_64_LEVEL == 1
+#    define DUCC0_SIMD_NAMESPACE detail_simd_dispatch_x86_64
+#  elif DUCC0_X86_64_LEVEL == 2
+#    define DUCC0_SIMD_NAMESPACE detail_simd_dispatch_x86_64_v2
+#  elif DUCC0_X86_64_LEVEL == 3
+#    define DUCC0_SIMD_NAMESPACE detail_simd_dispatch_x86_64_v3
+#  elif DUCC0_X86_64_LEVEL == 4
+#    define DUCC0_SIMD_NAMESPACE detail_simd_dispatch_x86_64_v4
+#  else
+#    error "Invalid DUCC0_X86_64_LEVEL"
+#  endif
+#else
+#  define DUCC0_SIMD_NAMESPACE detail_simd
+#endif
+
 // NOTE: this header is only there to potentially #define __GLIBCXX__
 // Do not delete this #include or move it farther below!
 #include <cstdint>
@@ -72,7 +89,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace ducc0 {
 
-namespace detail_simd {
+namespace DUCC0_SIMD_NAMESPACE {
 
 namespace stdx=std::experimental;
 using stdx::native_simd;
@@ -125,19 +142,29 @@ template<typename Tsimd> inline Tsimd loadu(const typename Tsimd::value_type *pt
 template<typename Tsimd> inline void storeu(Tsimd v, typename Tsimd::value_type *ptr)
   { v.copy_to(ptr, element_aligned_tag()); }
 
+#if defined(DUCC0_X86_64_LEVEL)
+template<typename Tsimd> inline void unaligned_add(
+  typename Tsimd::value_type *ptr, Tsimd v)
+  { storeu(loadu<Tsimd>(ptr)+v, ptr); }
+#endif
+
 }
 
-using detail_simd::element_aligned_tag;
-using detail_simd::native_simd;
-using detail_simd::simd_select;
-using detail_simd::simd_exists;
-using detail_simd::vectorizable;
-using detail_simd::blend;
-using detail_simd::loadu;
-using detail_simd::storeu;
+using DUCC0_SIMD_NAMESPACE::element_aligned_tag;
+using DUCC0_SIMD_NAMESPACE::native_simd;
+using DUCC0_SIMD_NAMESPACE::simd_select;
+using DUCC0_SIMD_NAMESPACE::simd_exists;
+using DUCC0_SIMD_NAMESPACE::vectorizable;
+using DUCC0_SIMD_NAMESPACE::blend;
+using DUCC0_SIMD_NAMESPACE::loadu;
+using DUCC0_SIMD_NAMESPACE::storeu;
 
+#if defined(DUCC0_X86_64_LEVEL)
+using DUCC0_SIMD_NAMESPACE::unaligned_add;
+#else
 template<typename Tsimd> inline void unaligned_add(typename Tsimd::value_type *ptr, Tsimd v)
   { storeu(loadu<Tsimd>(ptr)+v, ptr); }
+#endif
 }
 
 #else
@@ -194,7 +221,7 @@ template<typename Tsimd> inline void unaligned_add(typename Tsimd::value_type *p
 
 namespace ducc0 {
 
-namespace detail_simd {
+namespace DUCC0_SIMD_NAMESPACE {
 
 /// true iff SIMD support is provided for \a T.
 template<typename T> constexpr inline bool vectorizable = false;
@@ -870,18 +897,29 @@ template<typename Tsimd> inline Tsimd loadu(const typename Tsimd::value_type *pt
   { return Tsimd(ptr, element_aligned_tag()); }
 template<typename Tsimd> inline void storeu(Tsimd v, typename Tsimd::value_type *ptr)
   { v.copy_to(ptr, element_aligned_tag()); }
+
+#if defined(DUCC0_X86_64_LEVEL)
+template<typename Tsimd> inline void unaligned_add(
+  typename Tsimd::value_type *ptr, Tsimd v)
+  { storeu(loadu<Tsimd>(ptr)+v, ptr); }
+#endif
 }
 
-using detail_simd::element_aligned_tag;
-using detail_simd::native_simd;
-using detail_simd::simd_select;
-using detail_simd::simd_exists;
-using detail_simd::vectorizable;
-using detail_simd::loadu;
-using detail_simd::storeu;
+using DUCC0_SIMD_NAMESPACE::element_aligned_tag;
+using DUCC0_SIMD_NAMESPACE::native_simd;
+using DUCC0_SIMD_NAMESPACE::simd_select;
+using DUCC0_SIMD_NAMESPACE::simd_exists;
+using DUCC0_SIMD_NAMESPACE::vectorizable;
+using DUCC0_SIMD_NAMESPACE::loadu;
+using DUCC0_SIMD_NAMESPACE::storeu;
 
+#if defined(DUCC0_X86_64_LEVEL)
+using DUCC0_SIMD_NAMESPACE::unaligned_add;
+#else
 template<typename Tsimd> inline void unaligned_add(typename Tsimd::value_type *ptr, Tsimd v)
   { storeu(loadu<Tsimd>(ptr)+v, ptr); }
+#endif
 }
 #endif
+#undef DUCC0_SIMD_NAMESPACE
 #endif

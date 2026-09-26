@@ -10,6 +10,11 @@ endif()
 set(PKGNAME ${SKBUILD_PROJECT_NAME})
 set(PKGVERSION ${SKBUILD_PROJECT_VERSION})
 
+if(OPTFLAGS STREQUAL "dispatch")
+    include(cmake/CPUDispatch.cmake)
+    ducc0_configure_cpu_dispatch()
+endif()
+
 find_package(Python 3.8 REQUIRED COMPONENTS Interpreter Development.Module)
 
 set(CXX_SOURCES
@@ -23,6 +28,11 @@ set(CXX_SOURCES
     src/ducc0/wgridder/wgridder_inst2.cc src/ducc0/wgridder/wgridder_inst3.cc
     src/ducc0/infra/string_utils.cc
     src/ducc0/infra/threading.cc src/ducc0/infra/mav.cc src/ducc0/sht/sht.cc)
+if(OPTFLAGS STREQUAL "dispatch")
+    list(APPEND CXX_SOURCES
+        src/ducc0/infra/cpu_dispatch.cc
+        src/ducc0/fft/fft_dispatch_common.cc)
+endif()
 set(PYMOD_SOURCES
     python/nufft_pymod.cc python/fft_pymod.cc python/sht_pymod.cc
     python/misc_pymod.cc python/totalconvolve_pymod.cc python/wgridder_pymod.cc
@@ -63,7 +73,13 @@ if (NOT MSVC)
     else ()
         set(DUCC0_ARCH_FLAGS "-march=native" CACHE STRING "Compiler flags for specifying target architecture.")
     endif ()
-    message(STATUS "Using GCC/Clang flags: ${DUCC0_ARCH_FLAGS}")
+    if (OPTFLAGS MATCHES "^native")
+        message(STATUS "Using GCC/Clang native flags: ${DUCC0_ARCH_FLAGS}")
+    elseif (OPTFLAGS STREQUAL "dispatch")
+        message(STATUS "Using per-profile x86-64 flags for dispatch objects")
+    else()
+        message(STATUS "Using portable GCC/Clang flags")
+    endif()
 else ()
     # Check for AVX, AVX512 and SSE support
     message(STATUS "Checking for AVX, AVX512 and SSE support")
@@ -142,6 +158,10 @@ target_compile_options(${PKGNAME} PRIVATE ${COMP_OPTS})
 target_link_options(${PKGNAME} PRIVATE ${LINK_OPTS})
 target_compile_features(${PKGNAME} PRIVATE cxx_std_17)
 
-set_property(TARGET ${PKGNAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+if(OPTFLAGS STREQUAL "dispatch")
+    ducc0_finalize_cpu_dispatch(${PKGNAME})
+else()
+    set_property(TARGET ${PKGNAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+endif()
 
 install(TARGETS ${PKGNAME} LIBRARY DESTINATION .)

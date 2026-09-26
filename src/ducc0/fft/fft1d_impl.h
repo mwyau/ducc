@@ -77,9 +77,17 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "ducc0/math/unity_roots.h"
 #include "ducc0/fft/fft.h"
 
+#if defined(DUCC0_CPU_DISPATCH) || defined(DUCC0_FFT_PRIVATE_NAMESPACE)
+namespace ducc0 {
+namespace detail_fft {
+void sort_factors_descending(std::vector<std::size_t> &factors);
+}
+}
+#endif
+
 namespace ducc0 {
 
-namespace detail_fft {
+namespace DUCC0_FFT_NAMESPACE {
 
 using namespace std;
 
@@ -1622,7 +1630,11 @@ MR_fail("must not get here");
         {
         vector<size_t> packets(2,1);
         auto factors = util1d::prime_factors(ip);
+#if defined(DUCC0_CPU_DISPATCH) || defined(DUCC0_FFT_PRIVATE_NAMESPACE)
+        ::ducc0::detail_fft::sort_factors_descending(factors);
+#else
         sort(factors.begin(), factors.end(), std::greater<size_t>());
+#endif
         for (auto fct: factors)
           (packets[0]>packets[1]) ? packets[1]*=fct : packets[0]*=fct;
         size_t l1l=1;

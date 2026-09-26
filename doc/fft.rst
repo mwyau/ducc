@@ -1,6 +1,17 @@
 FFT
 ===
 
+Runtime dispatch
+----------------
+
+Building with ``DUCC0_OPTIMIZATION=dispatch`` enables x86-64 FFT runtime
+dispatch. Production builds compile V1, V3, and V4 profiles; V2 can be added
+with ``DUCC0_DISPATCH_PROFILES``. The highest usable compiled profile is
+selected, subject to the ``DUCC0_CPU_MAX`` cap. Use
+``ducc0.misc.cpu_info()`` to inspect detected features and the selected FFT
+profile. MSVC builds use compiler ISA targets and keep DUCC's homegrown SIMD
+implementation disabled.
+
 Miscellaneous notes on implementation details
 ---------------------------------------------
 

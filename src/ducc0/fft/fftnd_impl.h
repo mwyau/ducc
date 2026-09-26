@@ -74,6 +74,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "ducc0/math/cmplx.h"
 #include "ducc0/math/unity_roots.h"
 #include "ducc0/fft/fft1d_impl.h"
+#if defined(DUCC0_CPU_DISPATCH) && !defined(DUCC0_FFT_PRIVATE_NAMESPACE)
+#include "ducc0/fft/fft_dispatch.h"
+#endif
 
 /** \file fftnd_impl.h
  *  Implementation of multi-dimensional Fast Fourier and related transforms
@@ -89,9 +92,18 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace ducc0 {
 
-namespace detail_fft {
+namespace DUCC0_FFT_NAMESPACE {
 
 using namespace std;
+
+#if defined(DUCC0_CPU_DISPATCH) && !defined(DUCC0_FFT_PRIVATE_NAMESPACE)
+#define DUCC0_FFT_DISPATCH_CALL(method, ...) \
+  if constexpr (is_same_v<T,float> || is_same_v<T,double>) { \
+    detail_fft_dispatch::selected_fft_kernels<T>().method(__VA_ARGS__); return; \
+  }
+#else
+#define DUCC0_FFT_DISPATCH_CALL(method, ...)
+#endif
 
 namespace {
 
@@ -1378,6 +1390,9 @@ template<typename T> DUCC0_NOINLINE void c2c(const cfmav<complex<T>> &in,
   const vfmav<complex<T>> &out, const shape_t &axes, bool forward,
   T fct, size_t nthreads)
   {
+{
+  DUCC0_FFT_DISPATCH_CALL(c2c, in,out,axes,forward,fct,nthreads);
+
   util::sanity_check_onetype(in, out, in.data()==out.data(), axes);
   if (in.size()==0) return;
 
@@ -1388,7 +1403,11 @@ template<typename T> DUCC0_NOINLINE void c2c(const cfmav<complex<T>> &in,
     {
     size_t ip = in.shape(0);
     auto factors = util1d::prime_factors(ip);
+#if defined(DUCC0_CPU_DISPATCH) || defined(DUCC0_FFT_PRIVATE_NAMESPACE)
+    ::ducc0::detail_fft::sort_factors_descending(factors);
+#else
     sort(factors.begin(), factors.end(), std::greater<size_t>());
+#endif
     size_t f1=1, f2=1;
     for (auto fct: factors)
       (f2>f1) ? f1*=fct : f2*=fct;
@@ -1447,10 +1466,14 @@ template<typename T> DUCC0_NOINLINE void c2c(const cfmav<complex<T>> &in,
     }
   general_nd<pocketfft_c<T>>(in2, out2, axes, fct, nthreads, ExecC2C{forward});
   }
+}
 
 template<typename T> DUCC0_NOINLINE void dct(const cfmav<T> &in, const vfmav<T> &out,
   const shape_t &axes, int type, T fct, bool ortho, size_t nthreads)
   {
+{
+  DUCC0_FFT_DISPATCH_CALL(dct, in,out,axes,type,fct,ortho,nthreads);
+
   if ((type<1) || (type>4)) throw invalid_argument("invalid DCT type");
   util::sanity_check_onetype(in, out, in.data()==out.data(), axes);
   if (in.size()==0) return;
@@ -1462,10 +1485,14 @@ template<typename T> DUCC0_NOINLINE void dct(const cfmav<T> &in, const vfmav<T> 
   else
     general_nd<T_dcst23<T>>(in, out, axes, fct, nthreads, exec);
   }
+}
 
 template<typename T> DUCC0_NOINLINE void dst(const cfmav<T> &in, const vfmav<T> &out,
   const shape_t &axes, int type, T fct, bool ortho, size_t nthreads)
   {
+{
+  DUCC0_FFT_DISPATCH_CALL(dst, in,out,axes,type,fct,ortho,nthreads);
+
   if ((type<1) || (type>4)) throw invalid_argument("invalid DST type");
   util::sanity_check_onetype(in, out, in.data()==out.data(), axes);
   if (in.size()==0) return;
@@ -1477,22 +1504,30 @@ template<typename T> DUCC0_NOINLINE void dst(const cfmav<T> &in, const vfmav<T> 
   else
     general_nd<T_dcst23<T>>(in, out, axes, fct, nthreads, exec);
   }
+}
 
 template<typename T> DUCC0_NOINLINE void r2c(const cfmav<T> &in,
   const vfmav<complex<T>> &out, size_t axis, bool forward, T fct,
   size_t nthreads)
   {
+{
+  DUCC0_FFT_DISPATCH_CALL(r2c_axis, in,out,axis,forward,fct,nthreads);
+
   bool inplace = in.data() == reinterpret_cast<const T*>(out.data());
   util::sanity_check_cr(out, in, inplace, axis);
   if (in.size()==0) return;
   const auto &out2(reinterpret_cast<const vfmav<Cmplx<T>>&>(out));
   general_r2c(in, out2, axis, forward, fct, nthreads);
   }
+}
 
 template<typename T> DUCC0_NOINLINE void r2c(const cfmav<T> &in,
   const vfmav<complex<T>> &out, const shape_t &axes,
   bool forward, T fct, size_t nthreads)
   {
+{
+  DUCC0_FFT_DISPATCH_CALL(r2c_axes, in,out,axes,forward,fct,nthreads);
+
   bool inplace = in.data() == reinterpret_cast<const T*>(out.data());
   util::sanity_check_cr(out, in, inplace, axes);
   if (in.size()==0) return;
@@ -1502,21 +1537,29 @@ template<typename T> DUCC0_NOINLINE void r2c(const cfmav<T> &in,
   auto newaxes = shape_t{axes.begin(), --axes.end()};
   c2c(out, out, newaxes, forward, T(1), nthreads);
   }
+}
 
 template<typename T> DUCC0_NOINLINE void c2r(const cfmav<complex<T>> &in,
   const vfmav<T> &out,  size_t axis, bool forward, T fct, size_t nthreads)
   {
+{
+  DUCC0_FFT_DISPATCH_CALL(c2r_axis, in,out,axis,forward,fct,nthreads);
+
   bool inplace = reinterpret_cast<const T*>(in.data()) == out.data();
   util::sanity_check_cr(in, out, inplace, axis);
   if (in.size()==0) return;
   const auto &in2(reinterpret_cast<const cfmav<Cmplx<T>>&>(in));
   general_c2r(in2, out, axis, forward, fct, nthreads);
   }
+}
 
 template<typename T> DUCC0_NOINLINE void c2r_mut(const vfmav<complex<T>> &in,
   const vfmav<T> &out, const shape_t &axes, bool forward, T fct,
   size_t nthreads)
   {
+{
+  DUCC0_FFT_DISPATCH_CALL(c2r_mut, in,out,axes,forward,fct,nthreads);
+
   if (axes.size()==1)
     return c2r(in, out, axes[0], forward, fct, nthreads);
   bool inplace = reinterpret_cast<const T*>(in.data()) == out.data();
@@ -1526,11 +1569,15 @@ template<typename T> DUCC0_NOINLINE void c2r_mut(const vfmav<complex<T>> &in,
   c2c(in, in, newaxes, forward, T(1), nthreads);
   c2r(in, out, axes.back(), forward, fct, nthreads);
   }
+}
 
 template<typename T> DUCC0_NOINLINE void c2r(const cfmav<complex<T>> &in,
   const vfmav<T> &out, const shape_t &axes, bool forward, T fct,
   size_t nthreads)
   {
+{
+  DUCC0_FFT_DISPATCH_CALL(c2r_axes, in,out,axes,forward,fct,nthreads);
+
   if (axes.size()==1)
     return c2r(in, out, axes[0], forward, fct, nthreads);
   bool inplace = reinterpret_cast<const T*>(in.data()) == out.data();
@@ -1546,44 +1593,61 @@ template<typename T> DUCC0_NOINLINE void c2r(const cfmav<complex<T>> &in,
   c2c(in, atmp, newaxes, forward, T(1), nthreads);
   c2r(atmp, out, axes.back(), forward, fct, nthreads);
   }
+}
 
 template<typename T> DUCC0_NOINLINE void r2r_fftpack(const cfmav<T> &in,
   const vfmav<T> &out, const shape_t &axes, bool real2hermitian, bool forward,
   T fct, size_t nthreads)
   {
+{
+  DUCC0_FFT_DISPATCH_CALL(r2r_fftpack, in,out,axes,real2hermitian,forward,fct,nthreads);
+
   util::sanity_check_onetype(in, out, in.data()==out.data(), axes);
   if (in.size()==0) return;
   general_nd<pocketfft_r<T>>(in, out, axes, fct, nthreads,
     ExecR2R{real2hermitian, forward});
   }
+}
 
 template<typename T> DUCC0_NOINLINE void r2r_fftw(const cfmav<T> &in,
   const vfmav<T> &out, const shape_t &axes, bool forward,
   T fct, size_t nthreads)
   {
+{
+  DUCC0_FFT_DISPATCH_CALL(r2r_fftw, in,out,axes,forward,fct,nthreads);
+
   util::sanity_check_onetype(in, out, in.data()==out.data(), axes);
   if (in.size()==0) return;
   general_nd<pocketfft_fftw<T>>(in, out, axes, fct, nthreads,
     ExecFFTW{forward});
   }
+}
 
 template<typename T> DUCC0_NOINLINE void r2r_separable_hartley(const cfmav<T> &in,
   const vfmav<T> &out, const shape_t &axes, T fct, size_t nthreads)
   {
+{
+  DUCC0_FFT_DISPATCH_CALL(r2r_separable_hartley, in,out,axes,fct,nthreads);
+
   util::sanity_check_onetype(in, out, in.data()==out.data(), axes);
   if (in.size()==0) return;
   general_nd<pocketfft_hartley<T>>(in, out, axes, fct, nthreads,
     ExecHartley{}, false);
   }
+}
 
 template<typename T> DUCC0_NOINLINE void r2r_separable_fht(const cfmav<T> &in,
   const vfmav<T> &out, const shape_t &axes, T fct, size_t nthreads)
   {
+{
+  DUCC0_FFT_DISPATCH_CALL(r2r_separable_fht, in,out,axes,fct,nthreads);
+
   util::sanity_check_onetype(in, out, in.data()==out.data(), axes);
   if (in.size()==0) return;
   general_nd<pocketfft_fht<T>>(in, out, axes, fct, nthreads,
     ExecFHT{}, false);
   }
+}
 
 namespace {
 
@@ -1618,6 +1682,9 @@ template<typename T> [[maybe_unused]] void oscarize(const vfmav<T> &data, size_t
 template<typename T> void r2r_genuine_hartley(const cfmav<T> &in,
   const vfmav<T> &out, const shape_t &axes, T fct, size_t nthreads)
   {
+{
+  DUCC0_FFT_DISPATCH_CALL(r2r_genuine_hartley, in,out,axes,fct,nthreads);
+
   if (axes.size()==1)
     return r2r_separable_hartley(in, out, axes, fct, nthreads);
   if (axes.size()==2)
@@ -1639,10 +1706,14 @@ template<typename T> void r2r_genuine_hartley(const cfmav<T> &in,
     r1 = ccopy.real()-ccopy.imag();
     }, nthreads);
   }
+}
 
 template<typename T> void r2r_genuine_fht(const cfmav<T> &in,
   const vfmav<T> &out, const shape_t &axes, T fct, size_t nthreads)
   {
+{
+  DUCC0_FFT_DISPATCH_CALL(r2r_genuine_fht, in,out,axes,fct,nthreads);
+
   if (axes.size()==1)
     return r2r_separable_fht(in, out, axes, fct, nthreads);
   if (axes.size()==2)
@@ -1664,6 +1735,7 @@ template<typename T> void r2r_genuine_fht(const cfmav<T> &in,
     r1 = ccopy.real()+ccopy.imag();
     }, nthreads);
   }
+}
 
 namespace {
 
@@ -1818,6 +1890,9 @@ struct [[maybe_unused]] ExecConv1C
 template<typename T> DUCC0_NOINLINE void convolve_axis(const cfmav<T> &in,
   const vfmav<T> &out, size_t axis, const cmav<T,1> &kernel, size_t nthreads)
   {
+{
+  DUCC0_FFT_DISPATCH_CALL(convolve_real, in,out,axis,kernel,nthreads);
+
   MR_assert(axis<in.ndim(), "bad axis number");
   MR_assert(in.ndim()==out.ndim(), "dimensionality mismatch");
   if (in.data()==out.data())
@@ -1829,10 +1904,14 @@ template<typename T> DUCC0_NOINLINE void convolve_axis(const cfmav<T> &in,
   general_convolve_axis<pocketfft_r<T>, T>(in, out, axis, kernel, nthreads,
     ExecConv1R());
   }
+}
 template<typename T> DUCC0_NOINLINE void convolve_axis(const cfmav<complex<T>> &in,
   const vfmav<complex<T>> &out, size_t axis, const cmav<complex<T>,1> &kernel,
   size_t nthreads)
   {
+{
+  DUCC0_FFT_DISPATCH_CALL(convolve_complex, in,out,axis,kernel,nthreads);
+
   MR_assert(axis<in.ndim(), "bad axis number");
   MR_assert(in.ndim()==out.ndim(), "dimensionality mismatch");
   if (in.data()==out.data())
@@ -1847,8 +1926,11 @@ template<typename T> DUCC0_NOINLINE void convolve_axis(const cfmav<complex<T>> &
   general_convolve_axis<pocketfft_c<T>, T>(in2, out2, axis, kernel2, nthreads,
     ExecConv1C());
   }
+}
 
-} // namespace detail_fft
+} // namespace DUCC0_FFT_NAMESPACE
+
+#undef DUCC0_FFT_DISPATCH_CALL
 
 } // namespace ducc0
 

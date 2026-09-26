@@ -92,19 +92,35 @@ inline ::std::ostream &operator<<(::std::ostream &os, const CodeLocation &loc)
 template<typename ...Args>
 void streamDump__(::std::ostream &os, Args&&... args)
   { (os << ... << args); }
+}
+
+// Profile targets use different compiler ISA flags. Keep their error helpers
+// in separate namespaces just like the FFT implementation.
+#if defined(DUCC0_X86_64_LEVEL) && DUCC0_X86_64_LEVEL == 2
+#define DUCC0_ERROR_HANDLING_NAMESPACE detail_error_handling_x86_64_v2
+#elif defined(DUCC0_X86_64_LEVEL) && DUCC0_X86_64_LEVEL == 3
+#define DUCC0_ERROR_HANDLING_NAMESPACE detail_error_handling_x86_64_v3
+#elif defined(DUCC0_X86_64_LEVEL) && DUCC0_X86_64_LEVEL == 4
+#define DUCC0_ERROR_HANDLING_NAMESPACE detail_error_handling_x86_64_v4
+#else
+#define DUCC0_ERROR_HANDLING_NAMESPACE detail_error_handling
+#endif
+
+namespace DUCC0_ERROR_HANDLING_NAMESPACE {
 template<typename ...Args>
 [[noreturn]] DUCC0_NOINLINE void fail__(Args&&... args)
   {
-  ::std::ostringstream msg; \
-  ::ducc0::detail_error_handling::streamDump__(msg, std::forward<Args>(args)...); \
-    throw ::std::runtime_error(msg.str()); \
+  ::std::ostringstream msg;
+  ::ducc0::detail_error_handling::streamDump__(msg, std::forward<Args>(args)...);
+  throw ::std::runtime_error(msg.str());
   }
+}
 
 /// Throws a std::runtime_error containing the code location and the
 /// passed arguments.
 #define MR_fail(...) \
   do { \
-    ::ducc0::detail_error_handling::fail__(DUCC0_ERROR_HANDLING_LOC_, "\n", ##__VA_ARGS__, "\n"); \
+    ::ducc0::DUCC0_ERROR_HANDLING_NAMESPACE::fail__(DUCC0_ERROR_HANDLING_LOC_, "\n", ##__VA_ARGS__, "\n"); \
     } while(0)
 
 /// If \a cond is false, throws a std::runtime_error containing the code
@@ -115,6 +131,6 @@ template<typename ...Args>
     else { MR_fail("Assertion failure\n", ##__VA_ARGS__); } \
     } while(0)
 
-}}
+}
 
 #endif

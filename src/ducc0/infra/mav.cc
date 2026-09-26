@@ -51,6 +51,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <cmath>
+#include <complex>
 #include <tuple>
 #include <algorithm>
 #include "ducc0/infra/mav.h"
@@ -60,6 +61,44 @@ namespace ducc0 {
 namespace detail_mav {
 
 using namespace std;
+
+tuple<fmav_info, ptrdiff_t> fmav_info::subdata(const vector<slice> &slices) const
+  {
+  auto ndim = shp.size();
+  shape_t nshp(ndim);
+  stride_t nstr(ndim);
+  MR_assert(slices.size()==ndim, "incorrect number of slices");
+  size_t n0=0;
+  for (auto x:slices) if (x.beg==x.end) ++n0;
+  ptrdiff_t nofs=0;
+  nshp.resize(ndim-n0);
+  nstr.resize(ndim-n0);
+  for (size_t i=0, i2=0; i<ndim; ++i)
+    {
+// FIXME: this doesn't work when working on dimensions of size 0.
+// Do we want to fix this?
+    MR_assert(slices[i].beg<shp[i], "bad subset");
+    nofs+=slices[i].beg*str[i];
+    if (slices[i].beg!=slices[i].end)
+      {
+      auto ext = slices[i].size(shp[i]);
+      MR_assert(slices[i].beg+(ext-1)*slices[i].step<shp[i], "bad subset");
+      nshp[i2]=ext; nstr[i2]=slices[i].step*str[i];
+      ++i2;
+      }
+    }
+  return make_tuple(fmav_info(nshp, nstr), nofs);
+  }
+
+void push_info(vector<fmav_info> &infos, const fmav_info &info)
+  { infos.push_back(info); }
+
+template vfmav<complex<float>> vfmav<complex<float>>::build_noncritical(
+  const fmav_info::shape_t &, PAGE_IN);
+template vfmav<complex<double>> vfmav<complex<double>>::build_noncritical(
+  const fmav_info::shape_t &, PAGE_IN);
+template vmav<complex<float>,2>::operator vfmav<complex<float>>() const;
+template vmav<complex<double>,2>::operator vfmav<complex<double>>() const;
 
 DUCC0_NOINLINE void opt_shp_str(fmav_info::shape_t &shp, vector<fmav_info::stride_t> &str)
   {

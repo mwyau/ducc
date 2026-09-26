@@ -58,7 +58,23 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace ducc0 {
 
-namespace detail_unity_roots {
+#if defined(DUCC0_DISPATCH_TARGET)
+#if DUCC0_X86_64_LEVEL == 1
+#  define DUCC0_UNITY_ROOTS_NAMESPACE detail_unity_roots_target_x86_64
+#elif DUCC0_X86_64_LEVEL == 2
+#  define DUCC0_UNITY_ROOTS_NAMESPACE detail_unity_roots_target_x86_64_v2
+#elif DUCC0_X86_64_LEVEL == 3
+#  define DUCC0_UNITY_ROOTS_NAMESPACE detail_unity_roots_target_x86_64_v3
+#elif DUCC0_X86_64_LEVEL == 4
+#  define DUCC0_UNITY_ROOTS_NAMESPACE detail_unity_roots_target_x86_64_v4
+#else
+#  error "Unsupported DUCC x86-64 dispatch profile"
+#endif
+#else
+#  define DUCC0_UNITY_ROOTS_NAMESPACE detail_unity_roots
+#endif
+
+namespace DUCC0_UNITY_ROOTS_NAMESPACE {
 
 using namespace std;
 
@@ -332,9 +348,11 @@ template<typename T, typename Tc> class MultiExp
 
 }
 
-using detail_unity_roots::UnityRoots;
-using detail_unity_roots::MultiExp;
+using DUCC0_UNITY_ROOTS_NAMESPACE::UnityRoots;
+using DUCC0_UNITY_ROOTS_NAMESPACE::MultiExp;
 
 }
+
+#undef DUCC0_UNITY_ROOTS_NAMESPACE
 
 #endif

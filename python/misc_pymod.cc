@@ -37,6 +37,10 @@
 #include "ducc0/math/mcm.h"
 #include "ducc0/math/pswf_rokhlin.h"
 #include "ducc0/math/quaternion.h"
+#ifdef DUCC0_CPU_DISPATCH
+#include "ducc0/infra/cpu_dispatch.h"
+#include "ducc0/fft/fft_dispatch.h"
+#endif
 
 #include <vector>
 #include <cmath>
@@ -1898,6 +1902,41 @@ Returns
 tuple(int) : supported vector lengths for float32 and float64, respectively
 )""";
 
+#ifdef DUCC0_CPU_DISPATCH
+static py::dict cpu_info()
+  {
+  using namespace cpu_dispatch;
+  const auto &cpu=cpu_dispatch::cpu_info();
+  py::dict result;
+  result["architecture"]="x86-64";
+  py::list features;
+  features.append("sse2");
+  for (auto feature : reported_features)
+    if (has_feature(cpu,feature)) features.append(feature_name(feature));
+  if (static_cast<unsigned>(cpu.usable)>=
+      static_cast<unsigned>(Level::x86_64_v4))
+    features.append("avx512");
+  result["features"]=features;
+  result["usable_level"]=level_name(cpu.usable);
+  result["selection_cap"]=level_name(cpu.max_allowed);
+
+  py::dict fft;
+  py::list compiled;
+  for (auto level : detail_fft_dispatch::fft_compiled_targets())
+    compiled.append(level_name(level));
+  fft["compiled"]=compiled;
+  fft["selected"]=level_name(
+    detail_fft_dispatch::selected_fft_target<float>().level);
+  result["fft"]=fft;
+  return result;
+  }
+
+const char *cpu_info_DS = R"""(
+Returns the x86-64 features and usable level detected by the C++ runtime,
+plus the FFT profiles compiled and selected in this wheel.
+)""";
+#endif
+
 constexpr const char *misc_DS = R"""(
 Various unsorted utilities
 
@@ -1985,6 +2024,9 @@ void add_misc(py::module_ &msup)
 
   m.def("print_diagnostics", print_diagnostics, print_diagnostics_DS);
   m.def("native_vector_lengths", native_vector_lengths, native_vector_lengths_DS);
+#ifdef DUCC0_CPU_DISPATCH
+  m.def("cpu_info", cpu_info, cpu_info_DS);
+#endif
   }
 
 }

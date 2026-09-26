@@ -371,34 +371,12 @@ class fmav_info
       return fmav_info(shp2, str2);
       }
   protected:
-    auto subdata(const vector<slice> &slices) const
-      {
-      auto ndim = shp.size();
-      shape_t nshp(ndim);
-      stride_t nstr(ndim);
-      MR_assert(slices.size()==ndim, "incorrect number of slices");
-      size_t n0=0;
-      for (auto x:slices) if (x.beg==x.end) ++n0;
-      ptrdiff_t nofs=0;
-      nshp.resize(ndim-n0);
-      nstr.resize(ndim-n0);
-      for (size_t i=0, i2=0; i<ndim; ++i)
-        {
-// FIXME: this doesn't work when working on dimensions of size 0.
-// Do we want to fix this?
-        MR_assert(slices[i].beg<shp[i], "bad subset");
-        nofs+=slices[i].beg*str[i];
-        if (slices[i].beg!=slices[i].end)
-          {
-          auto ext = slices[i].size(shp[i]);
-          MR_assert(slices[i].beg+(ext-1)*slices[i].step<shp[i], "bad subset");
-          nshp[i2]=ext; nstr[i2]=slices[i].step*str[i];
-          ++i2;
-          }
-        }
-      return make_tuple(fmav_info(nshp, nstr), nofs);
-      }
+    tuple<fmav_info, ptrdiff_t> subdata(const vector<slice> &slices) const;
   };
+
+// Keep vector metadata appends in common code. FFT profile TUs share
+// fmav_info's type but are compiled with different ISA flags.
+void push_info(vector<fmav_info> &infos, const fmav_info &info);
 
 /// Helper class containing shape and stride information of a `mav` object
 template<template<typename, size_t> typename Tcontainer, size_t ndim> class mav_info_proto
@@ -803,6 +781,9 @@ template<typename T> class vfmav: public cfmav<T>
       for (size_t i=0; i<ndim; ++i) slc[i] = slice(0, shape[i]);
       return tmp.subarray(slc);
       }
+#if defined(DUCC0_DISPATCH_TARGET)
+    DUCC0_NOINLINE
+#endif
     static vfmav build_noncritical(const shape_t &shape, PAGE_IN page_in)
       {
       auto ndim = shape.size();
@@ -827,6 +808,15 @@ template<typename T> class vfmav: public cfmav<T>
                   *static_cast<const tbuf *>(this));
       }
   };
+
+#if defined(DUCC0_DISPATCH_TARGET)
+extern template vfmav<std::complex<float>>
+  vfmav<std::complex<float>>::build_noncritical(
+    const fmav_info::shape_t &, PAGE_IN);
+extern template vfmav<std::complex<double>>
+  vfmav<std::complex<double>>::build_noncritical(
+    const fmav_info::shape_t &, PAGE_IN);
+#endif
 
 template<typename T> vfmav<T> subarray
   (const vfmav<T> &arr, const vector<slice> &slices)
@@ -986,6 +976,9 @@ template<typename T, size_t ndim> class vmav: public cmav<T, ndim>
     void unassign()
       { assign(vmav()); }
     using tinfo::swap_axes;
+#if defined(DUCC0_DISPATCH_TARGET)
+    DUCC0_NOINLINE
+#endif
     operator vfmav<T>() const
       {
       return vfmav<T>(*const_cast<tbuf *>(static_cast<const tbuf *>(this)), {shp.begin(), shp.end()}, {str.begin(), str.end()});
@@ -1251,8 +1244,7 @@ template<typename Func, typename Ttuple>
 template<typename Func, typename... Targs>
   void mav_apply(Func &&func, int nthreads, Targs... args)
   {
-  vector<fmav_info> infos;
-  (infos.push_back(args), ...);
+  vector<fmav_info> infos{fmav_info(args)...};
   vector<size_t> tsizes;
   (tsizes.push_back(sizeof(args.data()[0])), ...);
   auto [shp, str, block0, block1] = multiprep(infos, tsizes);
@@ -1360,8 +1352,7 @@ template<typename ReduceType, typename Func, typename Ttuple>
 template<typename ReduceType, typename Func, typename... Targs>
   ReduceType mav_apply_reduce(Func &&func, int nthreads, Targs... args)
   {
-  vector<fmav_info> infos;
-  (infos.push_back(args), ...);
+  vector<fmav_info> infos{fmav_info(args)...};
   vector<size_t> tsizes;
   (tsizes.push_back(sizeof(args.data()[0])), ...);
   auto [shp, str, block0, block1] = multiprep(infos, tsizes);
@@ -1435,8 +1426,7 @@ template<typename Func, typename Ttuple>
 template<typename Func, typename... Targs>
   void mav_apply_with_index(Func &&func, int nthreads, Targs... args)
   {
-  vector<fmav_info> infos;
-  (infos.push_back(args), ...);
+  vector<fmav_info> infos{fmav_info(args)...};
   auto [shp, str] = multiprep_noopt(infos);
   vector<size_t> index(shp.size(), 0);
 
@@ -1565,7 +1555,7 @@ template<typename Ttuple, typename Tdim, typename Func>
   auto fullinfos = tuple_transform2(tuple, dim, [](const auto &arg, const auto &dim)
                                     { return make_infos<remove_reference_t<decltype(dim)>::dim>(fmav_info(arg)); });
   vector<fmav_info> iter_infos;
-  tuple_for_each(fullinfos,[&iter_infos](const auto &entry){iter_infos.push_back(get<0>(entry));});
+  tuple_for_each(fullinfos,[&iter_infos](const auto &entry){push_info(iter_infos,get<0>(entry));});
   auto [shp, str] = multiprep(iter_infos);
 
   auto infos2 = tuple_transform(fullinfos, [](const auto &arg)
@@ -1598,6 +1588,13 @@ template<size_t nd0, size_t nd1, size_t nd2,
                       forward_as_tuple(Xdim<nd0>(), Xdim<nd1>(), Xdim<nd2>()),
                       std::forward<Func>(func), nthreads);
   }
+
+#if defined(DUCC0_DISPATCH_TARGET)
+extern template vmav<std::complex<float>,2>::operator
+  vfmav<std::complex<float>>() const;
+extern template vmav<std::complex<double>,2>::operator
+  vfmav<std::complex<double>>() const;
+#endif
 
 }
 

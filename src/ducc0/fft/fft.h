@@ -55,6 +55,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef DUCC0_FFT_H
 #define DUCC0_FFT_H
 
+#ifndef DUCC0_FFT_NAMESPACE
+#define DUCC0_FFT_NAMESPACE detail_fft
+#endif
+
 #include <cstddef>
 #include <typeindex>
 #include <memory>
@@ -69,7 +73,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace ducc0 {
 
-namespace detail_fft {
+namespace DUCC0_FFT_NAMESPACE {
 
 using namespace std;
 
@@ -1044,36 +1048,38 @@ template<typename T0, typename T1, typename Func> void hermiteHelper(size_t idim
 
 }
 
-using detail_fft::pocketfft_c;
-using detail_fft::pocketfft_r;
-using detail_fft::pocketfft_hartley;
-using detail_fft::pocketfft_fht;
-using detail_fft::pocketfft_fftw;
+#if !defined(DUCC0_FFT_PRIVATE_NAMESPACE)
+using DUCC0_FFT_NAMESPACE::pocketfft_c;
+using DUCC0_FFT_NAMESPACE::pocketfft_r;
+using DUCC0_FFT_NAMESPACE::pocketfft_hartley;
+using DUCC0_FFT_NAMESPACE::pocketfft_fht;
+using DUCC0_FFT_NAMESPACE::pocketfft_fftw;
 
-using detail_fft::FORWARD;
-using detail_fft::BACKWARD;
-using detail_fft::c2c;
-using detail_fft::c2r;
-using detail_fft::c2r_mut;
-using detail_fft::r2c;
-using detail_fft::r2r_fftpack;
-using detail_fft::r2r_fftw;
-using detail_fft::r2r_separable_hartley;
-using detail_fft::r2r_genuine_hartley;
-using detail_fft::r2r_separable_fht;
-using detail_fft::r2r_genuine_fht;
-using detail_fft::dct;
-using detail_fft::dst;
-using detail_fft::convolve_axis;
+using DUCC0_FFT_NAMESPACE::FORWARD;
+using DUCC0_FFT_NAMESPACE::BACKWARD;
+using DUCC0_FFT_NAMESPACE::c2c;
+using DUCC0_FFT_NAMESPACE::c2r;
+using DUCC0_FFT_NAMESPACE::c2r_mut;
+using DUCC0_FFT_NAMESPACE::r2c;
+using DUCC0_FFT_NAMESPACE::r2r_fftpack;
+using DUCC0_FFT_NAMESPACE::r2r_fftw;
+using DUCC0_FFT_NAMESPACE::r2r_separable_hartley;
+using DUCC0_FFT_NAMESPACE::r2r_genuine_hartley;
+using DUCC0_FFT_NAMESPACE::r2r_separable_fht;
+using DUCC0_FFT_NAMESPACE::r2r_genuine_fht;
+using DUCC0_FFT_NAMESPACE::dct;
+using DUCC0_FFT_NAMESPACE::dst;
+using DUCC0_FFT_NAMESPACE::convolve_axis;
 
 inline size_t good_size_complex(size_t n)
-  { return detail_fft::util1d::good_size_cmplx(n); }
+  { return DUCC0_FFT_NAMESPACE::util1d::good_size_cmplx(n); }
 inline size_t good_size_real(size_t n)
-  { return detail_fft::util1d::good_size_real(n); }
+  { return DUCC0_FFT_NAMESPACE::util1d::good_size_real(n); }
 inline size_t good_size_complex(size_t n, size_t required_factor)
-  { return detail_fft::util1d::good_size_cmplx(n, required_factor); }
+  { return DUCC0_FFT_NAMESPACE::util1d::good_size_cmplx(n, required_factor); }
 inline size_t good_size_real(size_t n, size_t required_factor)
-  { return detail_fft::util1d::good_size_real(n, required_factor); }
+  { return DUCC0_FFT_NAMESPACE::util1d::good_size_real(n, required_factor); }
+#endif
 
 }
 

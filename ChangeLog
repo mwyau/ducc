@@ -1,4 +1,7 @@
 0.42.0:
+- fft:
+  - optional x86-64 runtime FFT dispatch
+
 - general:
   - Significantly enhanced CI functionality, contributed by
     Albert M. W. Yau
