@@ -448,6 +448,34 @@ def test_bda_empty_rows_without_frequency_lists():
     assert vis.shape == (0,)
 
 
+def test_empty_standard_rows_and_channels():
+    dirty = ducc0.wgridder.vis2dirty(
+        uvw=np.empty((0, 3)), freq=np.empty(0),
+        vis=np.empty((0, 0), dtype=np.complex128),
+        npix_x=32, npix_y=32, pixsize_x=1.e-4, pixsize_y=1.e-4,
+        epsilon=1.e-5)
+    np.testing.assert_array_equal(dirty, np.zeros((32, 32)))
+
+
+def test_empty_standard_channels():
+    dirty = ducc0.wgridder.vis2dirty(
+        uvw=np.zeros((1, 3)), freq=np.empty(0),
+        vis=np.empty((1, 0), dtype=np.complex128),
+        npix_x=32, npix_y=32, pixsize_x=1.e-4, pixsize_y=1.e-4,
+        epsilon=1.e-5)
+    np.testing.assert_array_equal(dirty, np.zeros((32, 32)))
+
+
+def test_bda_empty_frequency_list():
+    dirty = ducc0.wgridder.experimental.vis2dirty_bda(
+        uvw=np.zeros((1, 3)), freqlist_id=np.zeros(1, dtype=np.uint64),
+        freqlist_nfreqs=np.zeros(1, dtype=np.uint64),
+        freqlist_freqs=np.empty(0), vis=np.empty(0, dtype=np.complex128),
+        npix_x=32, npix_y=32, pixsize_x=1.e-4, pixsize_y=1.e-4,
+        epsilon=1.e-5)
+    np.testing.assert_array_equal(dirty, np.zeros((32, 32)))
+
+
 @pmp('nxdirty', [2, 16, 64])
 @pmp('nydirty', [2, 64])
 @pmp("nrow", (1, 100))
