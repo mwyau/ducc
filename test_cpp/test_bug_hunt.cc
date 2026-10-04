@@ -8,8 +8,8 @@
    (see run.sh).
 
    Usage: bugtests <name>
-   where <name> is one of: swap_axes, slice_wraparound, wigner3j_oob,
-                           template_kernel, healpix_interpol
+   where <name> is one of: swap_axes, slice_wraparound, subarray_empty_axis,
+                           wigner3j_oob, template_kernel, healpix_interpol
 */
 #include <cmath>
 #include <complex>
@@ -88,6 +88,31 @@ static int test_slice_wraparound()
   catch (const exception &)
     { cout << "slice(2, 5, -1) rejected as expected\n"; }
   if (ok) cout << "PASS slice_wraparound\n";
+  return ok ? 0 : 1;
+  }
+
+/* fmav_info::subdata() must preserve a full slice of an empty dimension.
+   Empty subviews are used when batched Python APIs select a transform whose
+   point dimension is zero. */
+static int test_subarray_empty_axis()
+  {
+  bool ok=true;
+  double dummy=0;
+  vmav<double,2> fixed(&dummy, {2,0}, {100,1});
+  auto fixed_sub=fixed.subarray<1>({slice(1), slice()});
+  if ((fixed_sub.shape(0)!=0) || (fixed_sub.size()!=0)
+      || (fixed_sub.data()!=fixed.data()))
+    ok=false;
+
+  fmav_info info({2,0}, {100,1});
+  vfmav<double> dynamic(&dummy, info);
+  auto dynamic_sub=dynamic.subarray({slice(1), slice()});
+  if ((dynamic_sub.shape(0)!=0) || (dynamic_sub.size()!=0)
+      || (dynamic_sub.data()!=dynamic.data()))
+    ok=false;
+
+  if (ok) cout << "PASS subarray_empty_axis\n";
+  else cout << "FAIL subarray_empty_axis\n";
   return ok ? 0 : 1;
   }
 
@@ -191,12 +216,13 @@ int main(int argc, char **argv)
   {
   if (argc != 2)
     {
-    cerr << "usage: " << argv[0] << " <swap_axes|slice_wraparound|wigner3j_oob|template_kernel|healpix_interpol>\n";
+    cerr << "usage: " << argv[0] << " <swap_axes|slice_wraparound|subarray_empty_axis|wigner3j_oob|template_kernel|healpix_interpol>\n";
     return 2;
     }
   string which = argv[1];
   if (which == "swap_axes") return test_swap_axes();
   if (which == "slice_wraparound") return test_slice_wraparound();
+  if (which == "subarray_empty_axis") return test_subarray_empty_axis();
   if (which == "wigner3j_oob") return test_wigner3j_oob();
   if (which == "template_kernel") return test_template_kernel();
   if (which == "healpix_interpol") return test_healpix_interpol();

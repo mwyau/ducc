@@ -181,6 +181,9 @@ struct slice
     }
   };
 
+template<typename T> static T *offset_ptr(T *ptr, ptrdiff_t offset)
+  { return (offset==0) ? ptr : ptr+offset; }
+
 /// Helper class containing shape and stride information of an `fmav` object
 class fmav_info
   {
@@ -386,8 +389,15 @@ class fmav_info
       nstr.resize(ndim-n0);
       for (size_t i=0, i2=0; i<ndim; ++i)
         {
-// FIXME: this doesn't work when working on dimensions of size 0.
-// Do we want to fix this?
+        if (shp[i]==0)
+          {
+          MR_assert(slices[i].beg==0 && slices[i].beg!=slices[i].end,
+            "bad subset");
+          nshp[i2]=0;
+          nstr[i2]=0;
+          ++i2;
+          continue;
+          }
         MR_assert(slices[i].beg<shp[i], "bad subset");
         nofs+=slices[i].beg*str[i];
         if (slices[i].beg!=slices[i].end)
@@ -398,6 +408,8 @@ class fmav_info
           ++i2;
           }
         }
+      if (find(nshp.begin(), nshp.end(), size_t(0))!=nshp.end())
+        nofs=0;
       return make_tuple(fmav_info(nshp, nstr), nofs);
       }
   };
@@ -586,8 +598,15 @@ template<template<typename, size_t> typename Tcontainer, size_t ndim> class mav_
       ptrdiff_t nofs=0;
       for (size_t i=0, i2=0; i<ndim; ++i)
         {
-// FIXME: this doesn't work when working on dimensions of size 0.
-// Do we want to fix this?
+        if (shp[i]==0)
+          {
+          MR_assert(slices[i].beg==0 && slices[i].beg!=slices[i].end,
+            "bad subset");
+          nshp[i2]=0;
+          nstr[i2]=0;
+          ++i2;
+          continue;
+          }
         MR_assert(slices[i].beg<shp[i], "bad subset");
         nofs+=slices[i].beg*str[i];
         if (slices[i].beg!=slices[i].end)
@@ -598,6 +617,8 @@ template<template<typename, size_t> typename Tcontainer, size_t ndim> class mav_
           ++i2;
           }
         }
+      if (find(nshp.begin(), nshp.end(), size_t(0))!=nshp.end())
+        nofs=0;
       return make_tuple(mav_info_proto<Tcontainer, nd2>(nshp, nstr), nofs);
       }
   };
@@ -680,7 +701,7 @@ template<typename T> class cfmav: public fmav_info, public cmembuf<T>
     cfmav subarray(const vector<slice> &slices) const
       {
       auto [ninfo, nofs] = subdata(slices);
-      return cfmav(ninfo, tbuf::d+nofs, *this);
+      return cfmav(ninfo, offset_ptr(tbuf::d, nofs), *this);
       }
     cfmav extend_and_broadcast(const shape_t &new_shape, const shape_t &axpos) const
       {
@@ -774,7 +795,7 @@ template<typename T> class vfmav: public cfmav<T>
     vfmav subarray(const vector<slice> &slices) const
       {
       auto [ninfo, nofs] = tinfo::subdata(slices);
-      return vfmav(ninfo, data()+nofs, *this);
+      return vfmav(ninfo, offset_ptr(data(), nofs), *this);
       }
     /** Returns a writable fmav with the specified shape.
      *  The strides are chosen in such a way that critical strides (multiples
@@ -893,7 +914,7 @@ template<typename T, size_t ndim> class cmav: public mav_info<ndim>, public cmem
     template<size_t nd2> cmav<T,nd2> subarray(const vector<slice> &slices) const
       {
       auto [ninfo, nofs] = tinfo::template subdata<nd2> (slices);
-      return cmav<T,nd2> (ninfo, tbuf::d+nofs, *this);
+      return cmav<T,nd2> (ninfo, offset_ptr(tbuf::d, nofs), *this);
       }
     template<size_t nd2>
     cmav<T,nd2> extend_and_broadcast(const array<size_t, nd2> &new_shape,
@@ -1006,7 +1027,7 @@ template<typename T, size_t ndim> class vmav: public cmav<T, ndim>
     template<size_t nd2> vmav<T,nd2> subarray(const vector<slice> &slices) const
       {
       auto [ninfo, nofs] = tinfo::template subdata<nd2> (slices);
-      return vmav<T,nd2> (ninfo, data()+nofs, *this);
+      return vmav<T,nd2> (ninfo, offset_ptr(data(), nofs), *this);
       }
 
     T *data() const
