@@ -404,6 +404,21 @@ def test_vis2dirty_wsclean(nx, ny, nrow, nchan, epsilon,
     assert_allclose(ducc0.misc.l2error(dirty2, ref), 0, atol=epsilon)
 
 
+def test_bda_rejects_out_of_range_frequency_id():
+    bad_id = np.array([np.iinfo(np.uint64).max], dtype=np.uint64)
+    common = dict(
+        uvw=np.zeros((1, 3)), freqlist_id=bad_id,
+        freqlist_nfreqs=np.array([1], dtype=np.uint64),
+        freqlist_freqs=np.array([1.e9]), pixsize_x=1.e-4,
+        pixsize_y=1.e-4, epsilon=1.e-5)
+    with pytest.raises(RuntimeError, match="freqlist_nfreqs array is too small"):
+        ducc0.wgridder.experimental.vis2dirty_bda(
+            **common, vis=np.array([1.+0.j]), npix_x=32, npix_y=32)
+    with pytest.raises(RuntimeError, match="freqlist_nfreqs array is too small"):
+        ducc0.wgridder.experimental.dirty2vis_bda(
+            **common, dirty=np.zeros((32, 32)))
+
+
 @pmp('nxdirty', [2, 16, 64])
 @pmp('nydirty', [2, 64])
 @pmp("nrow", (1, 100))
