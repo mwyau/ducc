@@ -715,9 +715,17 @@ void Distribution::thread_map(std::function<void(Scheduler &)> f)
     }
   {
   // do remaining work directly on this thread
-  ScopedValueChanger<bool> changer(in_parallel_region, true);
-  MyScheduler sched(*this, 0);
-  f(sched);
+  try
+    {
+    ScopedValueChanger<bool> changer(in_parallel_region, true);
+    MyScheduler sched(*this, 0);
+    f(sched);
+    }
+  catch (...)
+    {
+    LockGuard lock(ex_mut);
+    ex = std::current_exception();
+    }
   }
 
 #endif

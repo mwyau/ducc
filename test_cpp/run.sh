@@ -41,7 +41,8 @@ $CXX $CXXFLAGS -fsanitize=address -o "$OUT/bugtests" \
   test_cpp/test_bug_hunt.cc $SRCS -pthread 2>"$OUT/build.log" \
   || { note "BUILD FAILED"; cat "$OUT/build.log"; exit 1; }
 
-for t in swap_axes slice_wraparound subarray_empty_axis wigner3j_oob template_kernel healpix_interpol; do
+for t in swap_axes slice_wraparound subarray_empty_axis thread_exception_wait \
+         wigner3j_oob template_kernel healpix_interpol; do
   ASAN_OPTIONS=detect_leaks=0 "$OUT/bugtests" "$t" >"$OUT/$t.log" 2>&1
   report "$t" $? "$OUT/$t.log"
 done

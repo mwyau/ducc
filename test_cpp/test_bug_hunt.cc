@@ -14,10 +14,14 @@
 #include <cmath>
 #include <complex>
 #include <cstring>
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <new>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "ducc0/infra/mav.h"
@@ -25,6 +29,7 @@
 #include "ducc0/math/gridding_kernel.h"
 #include "ducc0/math/wigner3j.h"
 #include "ducc0/healpix/healpix_base.h"
+#include "ducc0/infra/threading.h"
 
 using namespace ducc0;
 using namespace std;
@@ -114,6 +119,62 @@ static int test_subarray_empty_axis()
   if (ok) cout << "PASS subarray_empty_axis\n";
   else cout << "FAIL subarray_empty_axis\n";
   return ok ? 0 : 1;
+  }
+
+/* Distribution::thread_map() must wait for submitted work before propagating
+   exceptions from the caller thread. Otherwise worker tasks can keep using
+   the destroyed Distribution and callback after stack unwinding. */
+class TestThreadPool: public thread_pool
+  {
+  private:
+    vector<thread> workers;
+  public:
+    ~TestThreadPool() override
+      { for (auto &worker: workers) worker.join(); }
+    size_t nthreads() const override { return 1; }
+    size_t adjust_nthreads(size_t nthreads) const override
+      { return min<size_t>(2, nthreads); }
+    void submit(function<void()> work) override
+      { workers.emplace_back(move(work)); }
+  };
+
+static int test_thread_exception_wait()
+  {
+  // Keep the thread-local master pool small; the test supplies a tiny pool of
+  // its own and must not depend on the host CPU count.
+  setenv("DUCC0_NUM_THREADS", "1", 1);
+  TestThreadPool pool;
+  ScopedUseThreadPool pool_guard(pool);
+  atomic<bool> worker_started{false}, worker_done{false};
+  bool caught=false, completed_at_catch=false;
+  try
+    {
+    execParallel(size_t(2), function<void(Scheduler &)>(
+      [&](Scheduler &sched)
+        {
+        if (sched.thread_num()==0)
+          {
+          while (!worker_started.load()) this_thread::yield();
+          throw runtime_error("caller failure");
+          }
+        worker_started.store(true);
+        this_thread::sleep_for(chrono::milliseconds(20));
+        volatile auto nthreads=sched.num_threads();
+        (void)nthreads;
+        worker_done.store(true);
+        }));
+    }
+  catch (const runtime_error &e)
+    { caught=string(e.what())=="caller failure"; }
+  completed_at_catch=worker_done.load();
+  // Keep the pool alive until the submitted worker finishes even when this
+  // test fails against the buggy implementation.
+  while (!worker_done.load()) this_thread::yield();
+  if (caught && completed_at_catch)
+    cout << "PASS thread_exception_wait\n";
+  else
+    cout << "FAIL thread_exception_wait\n";
+  return (caught && completed_at_catch) ? 0 : 1;
   }
 
 /* Wigner3j_direct::calc() (src/ducc0/math/wigner3j.h:191) evaluates
@@ -216,13 +277,14 @@ int main(int argc, char **argv)
   {
   if (argc != 2)
     {
-    cerr << "usage: " << argv[0] << " <swap_axes|slice_wraparound|subarray_empty_axis|wigner3j_oob|template_kernel|healpix_interpol>\n";
+    cerr << "usage: " << argv[0] << " <swap_axes|slice_wraparound|subarray_empty_axis|thread_exception_wait|wigner3j_oob|template_kernel|healpix_interpol>\n";
     return 2;
     }
   string which = argv[1];
   if (which == "swap_axes") return test_swap_axes();
   if (which == "slice_wraparound") return test_slice_wraparound();
   if (which == "subarray_empty_axis") return test_subarray_empty_axis();
+  if (which == "thread_exception_wait") return test_thread_exception_wait();
   if (which == "wigner3j_oob") return test_wigner3j_oob();
   if (which == "template_kernel") return test_template_kernel();
   if (which == "healpix_interpol") return test_healpix_interpol();
