@@ -200,6 +200,16 @@ static int test_slice_min_step()
     auto open=arr.subarray<1>({slice(1, MAXIDX, step)});
     if ((finite.size()!=1) || (finite(0)!=20.)) ok=false;
     if ((open.size()!=1) || (open(0)!=20.)) ok=false;
+
+    double raw[2]={10., 20.};
+    vmav<double,1> fixed_reversed(raw+1, {2}, {-1});
+    auto fixed_single=fixed_reversed.subarray<1>({slice(1, 0, step)});
+    if ((fixed_single.size()!=1) || (fixed_single(0)!=10.)) ok=false;
+
+    fmav_info info({2}, {-1});
+    vfmav<double> dynamic_reversed(raw+1, info);
+    auto dynamic_single=dynamic_reversed.subarray({slice(1, 0, step)});
+    if ((dynamic_single.size()!=1) || (dynamic_single(0)!=10.)) ok=false;
     }
   catch (const exception &e)
     {
