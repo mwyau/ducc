@@ -11,7 +11,7 @@
    where <name> is one of: swap_axes, slice_wraparound, subarray_empty_axis,
                            build_noncritical_empty, reverse_slice_open_end,
                            slice_min_step, wigner3j_oob, template_kernel,
-                           healpix_interpol
+                           healpix_interpol, isqrt
 */
 #include <cmath>
 #include <complex>
@@ -373,11 +373,42 @@ static int test_healpix_interpol()
   return 0;
   }
 
+
+/* isqrt (src/ducc0/math/math_utils.h): for 64-bit arguments where the
+   result is near 2^32-1, (res+1)*(res+1) can overflow 64-bit arithmetic.
+   isqrt must return the floor integer square root up to UINT64_MAX. */
+static int test_isqrt()
+  {
+  bool ok = true;
+  uint64_t max32 = 0xFFFFFFFFULL;
+  uint64_t sq_max32 = max32 * max32;
+  if (isqrt(sq_max32) != max32)
+    {
+    cout << "isqrt(" << sq_max32 << ") = " << isqrt(sq_max32)
+         << ", expected " << max32 << "\n";
+    ok = false;
+    }
+  if (isqrt(~0ULL) != max32)
+    {
+    cout << "isqrt(UINT64_MAX) = " << isqrt(~0ULL)
+         << ", expected " << max32 << "\n";
+    ok = false;
+    }
+  if (isqrt(sq_max32 - 1) != max32 - 1)
+    {
+    cout << "isqrt(" << sq_max32 - 1 << ") = " << isqrt(sq_max32 - 1)
+         << ", expected " << max32 - 1 << "\n";
+    ok = false;
+    }
+  if (ok) cout << "PASS isqrt\n";
+  return ok ? 0 : 1;
+  }
+
 int main(int argc, char **argv)
   {
   if (argc != 2)
     {
-    cerr << "usage: " << argv[0] << " <swap_axes|slice_wraparound|subarray_empty_axis|build_noncritical_empty|reverse_slice_open_end|slice_min_step|thread_exception_wait|wigner3j_oob|template_kernel|healpix_interpol>\n";
+    cerr << "usage: " << argv[0] << " <swap_axes|slice_wraparound|subarray_empty_axis|build_noncritical_empty|reverse_slice_open_end|slice_min_step|thread_exception_wait|wigner3j_oob|template_kernel|healpix_interpol|isqrt>\n";
     return 2;
     }
   string which = argv[1];
@@ -391,6 +422,7 @@ int main(int argc, char **argv)
   if (which == "wigner3j_oob") return test_wigner3j_oob();
   if (which == "template_kernel") return test_template_kernel();
   if (which == "healpix_interpol") return test_healpix_interpol();
+  if (which == "isqrt") return test_isqrt();
   cerr << "unknown test '" << which << "'\n";
   return 2;
   }
