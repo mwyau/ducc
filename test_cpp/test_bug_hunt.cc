@@ -9,7 +9,8 @@
 
    Usage: bugtests <name>
    where <name> is one of: swap_axes, slice_wraparound, subarray_empty_axis,
-                           wigner3j_oob, template_kernel, healpix_interpol
+                           build_noncritical_empty, wigner3j_oob,
+                           template_kernel, healpix_interpol
 */
 #include <cmath>
 #include <complex>
@@ -118,6 +119,44 @@ static int test_subarray_empty_axis()
 
   if (ok) cout << "PASS subarray_empty_axis\n";
   else cout << "FAIL subarray_empty_axis\n";
+  return ok ? 0 : 1;
+  }
+
+/* build_noncritical() must preserve zero-length axes in the returned view. */
+static int test_build_noncritical_empty()
+  {
+  bool ok=true;
+  auto check = [&ok](const auto &arr, size_t n0, size_t n1)
+    {
+    if ((arr.shape(0)!=n0) || (arr.shape(1)!=n1) || (arr.size()!=0))
+      ok=false;
+    };
+  try
+    {
+    auto fixed_1d=vmav<double,1>::build_noncritical({0});
+    if ((fixed_1d.shape(0)!=0) || (fixed_1d.size()!=0)) ok=false;
+    auto fixed=vmav<double,2>::build_noncritical({2,0});
+    check(fixed, 2, 0);
+    auto fixed_uninit=vmav<double,2>::build_noncritical({0,2}, UNINITIALIZED);
+    check(fixed_uninit, 0, 2);
+    auto fixed_pagein=vmav<double,2>::build_noncritical({2,0}, PAGE_IN(1));
+    check(fixed_pagein, 2, 0);
+    auto fixed_padded=vmav<double,2>::build_noncritical({0,512}, UNINITIALIZED);
+    check(fixed_padded, 0, 512);
+    auto dynamic=vfmav<double>::build_noncritical({2,0});
+    check(dynamic, 2, 0);
+    auto dynamic_uninit=vfmav<double>::build_noncritical({0,2}, UNINITIALIZED);
+    check(dynamic_uninit, 0, 2);
+    auto dynamic_pagein=vfmav<double>::build_noncritical({0,2}, PAGE_IN(1));
+    check(dynamic_pagein, 0, 2);
+    }
+  catch (const exception &e)
+    {
+    cout << "build_noncritical rejected an empty shape: " << e.what() << "\n";
+    ok=false;
+    }
+  if (ok) cout << "PASS build_noncritical_empty\n";
+  else cout << "FAIL build_noncritical_empty\n";
   return ok ? 0 : 1;
   }
 
@@ -277,13 +316,14 @@ int main(int argc, char **argv)
   {
   if (argc != 2)
     {
-    cerr << "usage: " << argv[0] << " <swap_axes|slice_wraparound|subarray_empty_axis|thread_exception_wait|wigner3j_oob|template_kernel|healpix_interpol>\n";
+    cerr << "usage: " << argv[0] << " <swap_axes|slice_wraparound|subarray_empty_axis|build_noncritical_empty|thread_exception_wait|wigner3j_oob|template_kernel|healpix_interpol>\n";
     return 2;
     }
   string which = argv[1];
   if (which == "swap_axes") return test_swap_axes();
   if (which == "slice_wraparound") return test_slice_wraparound();
   if (which == "subarray_empty_axis") return test_subarray_empty_axis();
+  if (which == "build_noncritical_empty") return test_build_noncritical_empty();
   if (which == "thread_exception_wait") return test_thread_exception_wait();
   if (which == "wigner3j_oob") return test_wigner3j_oob();
   if (which == "template_kernel") return test_template_kernel();
