@@ -10,7 +10,8 @@
    Usage: bugtests <name>
    where <name> is one of: swap_axes, slice_wraparound, subarray_empty_axis,
                            build_noncritical_empty, reverse_slice_open_end,
-                           wigner3j_oob, template_kernel, healpix_interpol
+                           slice_min_step, wigner3j_oob, template_kernel,
+                           healpix_interpol
 */
 #include <cmath>
 #include <complex>
@@ -20,6 +21,7 @@
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <new>
 #include <string>
 #include <thread>
@@ -184,6 +186,31 @@ static int test_reverse_slice_open_end()
   return ok ? 0 : 1;
   }
 
+/* Negative step magnitude must be computed without overflowing at PTRDIFF_MIN. */
+static int test_slice_min_step()
+  {
+  vmav<double,1> arr({2});
+  arr(0)=10.;
+  arr(1)=20.;
+  auto step=std::numeric_limits<ptrdiff_t>::min();
+  bool ok=true;
+  try
+    {
+    auto finite=arr.subarray<1>({slice(1, 0, step)});
+    auto open=arr.subarray<1>({slice(1, MAXIDX, step)});
+    if ((finite.size()!=1) || (finite(0)!=20.)) ok=false;
+    if ((open.size()!=1) || (open(0)!=20.)) ok=false;
+    }
+  catch (const exception &e)
+    {
+    cout << "PTRDIFF_MIN slice failed: " << e.what() << "\n";
+    ok=false;
+    }
+  if (ok) cout << "PASS slice_min_step\n";
+  else cout << "FAIL slice_min_step\n";
+  return ok ? 0 : 1;
+  }
+
 /* Distribution::thread_map() must wait for submitted work before propagating
    exceptions from the caller thread. Otherwise worker tasks can keep using
    the destroyed Distribution and callback after stack unwinding. */
@@ -340,7 +367,7 @@ int main(int argc, char **argv)
   {
   if (argc != 2)
     {
-    cerr << "usage: " << argv[0] << " <swap_axes|slice_wraparound|subarray_empty_axis|build_noncritical_empty|reverse_slice_open_end|thread_exception_wait|wigner3j_oob|template_kernel|healpix_interpol>\n";
+    cerr << "usage: " << argv[0] << " <swap_axes|slice_wraparound|subarray_empty_axis|build_noncritical_empty|reverse_slice_open_end|slice_min_step|thread_exception_wait|wigner3j_oob|template_kernel|healpix_interpol>\n";
     return 2;
     }
   string which = argv[1];
@@ -349,6 +376,7 @@ int main(int argc, char **argv)
   if (which == "subarray_empty_axis") return test_subarray_empty_axis();
   if (which == "build_noncritical_empty") return test_build_noncritical_empty();
   if (which == "reverse_slice_open_end") return test_reverse_slice_open_end();
+  if (which == "slice_min_step") return test_slice_min_step();
   if (which == "thread_exception_wait") return test_thread_exception_wait();
   if (which == "wigner3j_oob") return test_wigner3j_oob();
   if (which == "template_kernel") return test_template_kernel();
