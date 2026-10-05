@@ -108,6 +108,15 @@ def test_special_add_at_complex(dtype):
     np.testing.assert_array_almost_equal(out, expected)
 
 
+
+@pmp("a, b, expected", [(0., 0., 0.), (0j, 0j, 0.), (0., 0j, 0.),
+                       (3., 4., 0.25), (0., 2., 1.),
+                       (1+2j, 3+4j, np.sqrt(8)/5), (0j, 1+2j, 1.)])
+def test_l2error_scalar(a, b, expected):
+    assert_allclose(ducc0.misc.l2error(a, b), expected)
+    assert_allclose(ducc0.misc.l2error(np.array([a]), np.array([b])), expected)
+
+
 def test_vdot_unaligned_singleton_and_empty_strides():
     singleton = np.lib.stride_tricks.as_strided(
         np.array([2.]), shape=(1,), strides=(1,))
