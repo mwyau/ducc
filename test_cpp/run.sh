@@ -42,7 +42,8 @@ $CXX $CXXFLAGS -fsanitize=address -o "$OUT/bugtests" \
   || { note "BUILD FAILED"; cat "$OUT/build.log"; exit 1; }
 
 for t in swap_axes slice_wraparound subarray_empty_axis build_noncritical_empty \
-         thread_exception_wait wigner3j_oob template_kernel healpix_interpol; do
+         reverse_slice_open_end thread_exception_wait wigner3j_oob \
+         template_kernel healpix_interpol; do
   ASAN_OPTIONS=detect_leaks=0 "$OUT/bugtests" "$t" >"$OUT/$t.log" 2>&1
   report "$t" $? "$OUT/$t.log"
 done

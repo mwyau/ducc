@@ -166,7 +166,7 @@ struct slice
     : beg(beg_), end(end_), step(step_)
     {
     MR_assert(step!=0, "slice step must not be 0");
-    if (beg!=end)
+    if ((beg!=end) && !((end==MAXIDX) && (step<0)))
       MR_assert((beg<end)!=(step<0), "step does not match begin, end ordering");
     }
 

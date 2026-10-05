@@ -9,8 +9,8 @@
 
    Usage: bugtests <name>
    where <name> is one of: swap_axes, slice_wraparound, subarray_empty_axis,
-                           build_noncritical_empty, wigner3j_oob,
-                           template_kernel, healpix_interpol
+                           build_noncritical_empty, reverse_slice_open_end,
+                           wigner3j_oob, template_kernel, healpix_interpol
 */
 #include <cmath>
 #include <complex>
@@ -157,6 +157,30 @@ static int test_build_noncritical_empty()
     }
   if (ok) cout << "PASS build_noncritical_empty\n";
   else cout << "FAIL build_noncritical_empty\n";
+  return ok ? 0 : 1;
+  }
+
+/* The MAXIDX end marker represents an open end and must work with reverse
+   slices as well as forward slices. */
+static int test_reverse_slice_open_end()
+  {
+  vmav<double,1> arr({4});
+  for (size_t i=0; i<4; ++i) arr(i)=double(i);
+  bool ok=true;
+  try
+    {
+    auto rev=arr.subarray<1>({slice(3, MAXIDX, -1)});
+    if ((rev.shape(0)!=4) || (rev.stride(0)!=-1)) ok=false;
+    for (size_t i=0; i<4; ++i)
+      if (rev(i)!=double(3-i)) ok=false;
+    }
+  catch (const exception &e)
+    {
+    cout << "reverse open-end slice was rejected: " << e.what() << "\n";
+    ok=false;
+    }
+  if (ok) cout << "PASS reverse_slice_open_end\n";
+  else cout << "FAIL reverse_slice_open_end\n";
   return ok ? 0 : 1;
   }
 
@@ -316,7 +340,7 @@ int main(int argc, char **argv)
   {
   if (argc != 2)
     {
-    cerr << "usage: " << argv[0] << " <swap_axes|slice_wraparound|subarray_empty_axis|build_noncritical_empty|thread_exception_wait|wigner3j_oob|template_kernel|healpix_interpol>\n";
+    cerr << "usage: " << argv[0] << " <swap_axes|slice_wraparound|subarray_empty_axis|build_noncritical_empty|reverse_slice_open_end|thread_exception_wait|wigner3j_oob|template_kernel|healpix_interpol>\n";
     return 2;
     }
   string which = argv[1];
@@ -324,6 +348,7 @@ int main(int argc, char **argv)
   if (which == "slice_wraparound") return test_slice_wraparound();
   if (which == "subarray_empty_axis") return test_subarray_empty_axis();
   if (which == "build_noncritical_empty") return test_build_noncritical_empty();
+  if (which == "reverse_slice_open_end") return test_reverse_slice_open_end();
   if (which == "thread_exception_wait") return test_thread_exception_wait();
   if (which == "wigner3j_oob") return test_wigner3j_oob();
   if (which == "template_kernel") return test_template_kernel();
