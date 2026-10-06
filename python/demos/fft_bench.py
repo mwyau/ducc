@@ -14,6 +14,8 @@
 # Copyright(C) 2019-2023 Max-Planck-Society
 
 
+import argparse
+
 import numpy as np
 import ducc0
 from time import time
@@ -168,21 +170,56 @@ def bench_nd(ndim, nmax, nthr, ntry, tp, funcs, nrepeat, ttl="", filename="",
     plt.show()
     plt.close()
 
-ducc0.misc.preallocate_memory(1)
 
-f1 = lambda a, nrepeat, nthr: measure_duccfft(a, nrepeat, nthr, inplace=True, noncritical=False)
-#f2 = lambda a, nrepeat, nthr: measure_pocketfft(a, nrepeat, nthr, inplace=True)
-f2 = lambda a, nrepeat, nthr: measure_fftw(a, nrepeat, nthr, flags=('FFTW_MEASURE',), timelimit=20)
-funcs = (f1, f2)
-ttl = "duccfft/FFTW"
-ntry = 10
-nthr = 1
-nice_sizes = True
-limits = [8192, 2048, 256]
-#limits = [524288, 8192, 512]
-bench_nd(1, limits[0], nthr, ntry, "c16", funcs, 10, ttl, "1d.png", nice_sizes)
-bench_nd(2, limits[1], nthr, ntry, "c16", funcs, 10, ttl, "2d.png", nice_sizes)
-bench_nd(3, limits[2], nthr, ntry, "c16", funcs, 10, ttl, "3d.png", nice_sizes)
-bench_nd(1, limits[0], nthr, ntry, "c8", funcs, 10, ttl, "1d_single.png", nice_sizes)
-bench_nd(2, limits[1], nthr, ntry, "c8", funcs, 10, ttl, "2d_single.png", nice_sizes)
-bench_nd(3, limits[2], nthr, ntry, "c8", funcs, 10, ttl, "3d_single.png", nice_sizes)
+def main():
+    parser = argparse.ArgumentParser(description="Compare DUCC FFT performance")
+    parser.add_argument("--reference", choices=("fftw", "scipy", "numpy"),
+                        default="fftw")
+    parser.add_argument("--threads", type=int, default=1)
+    parser.add_argument("--ntry", type=int, default=10)
+    parser.add_argument("--nrepeat", type=int, default=10)
+    args = parser.parse_args()
+
+    if args.threads < 1:
+        parser.error("--threads must be at least 1")
+    if args.ntry < 1:
+        parser.error("--ntry must be at least 1")
+    if args.nrepeat < 1:
+        parser.error("--nrepeat must be at least 1")
+    if args.reference == "numpy" and args.threads != 1:
+        parser.error("--reference numpy requires --threads 1")
+
+    references = {
+        "fftw": (measure_fftw, "FFTW"),
+        "scipy": (measure_scipy_fft, "SciPy"),
+        "numpy": (measure_numpy_fft, "NumPy"),
+    }
+    reference_func, reference_name = references[args.reference]
+    print("DUCC CPU info:", ducc0.misc.cpu_info())
+    print("Reference: {}; threads: {}".format(reference_name, args.threads))
+
+    ducc0.misc.preallocate_memory(1)
+    f1 = lambda a, nrepeat, nthr: measure_duccfft(
+        a, nrepeat, nthr, inplace=True, noncritical=False)
+    if args.reference == "fftw":
+        f2 = lambda a, nrepeat, nthr: reference_func(
+            a, nrepeat, nthr, flags=("FFTW_MEASURE",), timelimit=20)
+    else:
+        f2 = reference_func
+    funcs = (f1, f2)
+    ttl = "duccfft/{}".format(reference_name)
+    limits = [8192, 2048, 256]
+    nice_sizes = True
+    for ndim, nmax, tp, filename in (
+            (1, limits[0], "c16", "1d.png"),
+            (2, limits[1], "c16", "2d.png"),
+            (3, limits[2], "c16", "3d.png"),
+            (1, limits[0], "c8", "1d_single.png"),
+            (2, limits[1], "c8", "2d_single.png"),
+            (3, limits[2], "c8", "3d_single.png")):
+        bench_nd(ndim, nmax, args.threads, args.ntry, tp, funcs,
+                 args.nrepeat, ttl, filename, nice_sizes)
+
+
+if __name__ == "__main__":
+    main()

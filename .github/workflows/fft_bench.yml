@@ -1,0 +1,68 @@
+name: FFT benchmarks
+
+on:
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-26.04
+    env:
+      DUCC0_OPTIMIZATION: multiarch-strip
+      MPLBACKEND: Agg
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Install benchmark dependencies
+        run: python -m pip install --user --upgrade numpy scipy matplotlib pyfftw
+
+      - name: Build and install
+        run: python -m pip install --user .
+
+      - name: CPU info
+        id: cpu_info
+        run: python .github/scripts/check_cpu_info.py multiarch
+
+      - name: Benchmark usable profiles
+        env:
+          HAS_V3: ${{ steps.cpu_info.outputs.v3 }}
+          HAS_V4: ${{ steps.cpu_info.outputs.v4 }}
+        run: |
+          run_profile() {
+            level="$1"
+            profile="$2"
+            expected="$3"
+            export DUCC0_MAX_PSABI_LEVEL="$level"
+
+            python -c 'import sys, ducc0; info = ducc0.misc.cpu_info(); assert info["active_profile"] == sys.argv[1], info; print(info)' "$expected"
+
+            for reference in fftw scipy numpy; do
+              output_dir="$GITHUB_WORKSPACE/fft-bench/$profile/$reference"
+              mkdir -p "$output_dir"
+              (
+                cd "$output_dir"
+                python "$GITHUB_WORKSPACE/python/demos/fft_bench.py" \
+                  --reference "$reference" --threads 1
+              )
+            done
+          }
+
+          mkdir -p fft-bench
+          run_profile 1 x86-64 x86-64
+          if [[ "$HAS_V3" == 'true' ]]; then
+            run_profile 3 x86-64-v3 x86-64-v3
+          fi
+          if [[ "$HAS_V4" == 'true' ]]; then
+            run_profile 4 x86-64-v4 x86-64-v4
+          fi
+
+      - name: Upload benchmark plots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fft-bench
+          path: fft-bench/
