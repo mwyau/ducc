@@ -4,7 +4,25 @@
 cmake_minimum_required(VERSION 3.15...3.27)
 project(${SKBUILD_PROJECT_NAME} LANGUAGES CXX)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-set(CMAKE_INTERPROCEDURAL_OPTIMIZATION True)
+# Keep the existing IPO default while allowing the FFT diagnostic to turn it off.
+set(DUCC0_MULTIARCH_PROFILE_IPO FALSE)
+if(DEFINED ENV{DUCC0_ENABLE_LTO})
+    string(TOUPPER "$ENV{DUCC0_ENABLE_LTO}" DUCC0_ENABLE_LTO)
+    if(DUCC0_ENABLE_LTO STREQUAL "ON"
+       OR DUCC0_ENABLE_LTO STREQUAL "TRUE"
+       OR DUCC0_ENABLE_LTO STREQUAL "1")
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+        set(DUCC0_MULTIARCH_PROFILE_IPO TRUE)
+    elseif(DUCC0_ENABLE_LTO STREQUAL "OFF"
+           OR DUCC0_ENABLE_LTO STREQUAL "FALSE"
+           OR DUCC0_ENABLE_LTO STREQUAL "0")
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION FALSE)
+    else()
+        message(FATAL_ERROR "DUCC0_ENABLE_LTO must be ON or OFF")
+    endif()
+else()
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+endif()
 set(CMAKE_CXX_VISIBILITY_PRESET hidden)
 set(CMAKE_CXX_STANDARD 17)
 
@@ -106,16 +124,16 @@ if (MULTIARCH)
     add_library(${PKGNAME}_lib_v1 OBJECT ${PYMOD_SOURCES} ${CXX_SOURCES})
     add_library(${PKGNAME}_lib_v3 OBJECT ${PYMOD_SOURCES} ${CXX_SOURCES})
     add_library(${PKGNAME}_lib_v4 OBJECT ${PYMOD_SOURCES} ${CXX_SOURCES})
-    set_property(TARGET ${PKGNAME}_lib_v1 PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
-    set_property(TARGET ${PKGNAME}_lib_v3 PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
-    set_property(TARGET ${PKGNAME}_lib_v4 PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
+    foreach(_profile v1 v3 v4)
+        set_property(TARGET ${PKGNAME}_lib_${_profile}
+            PROPERTY INTERPROCEDURAL_OPTIMIZATION ${DUCC0_MULTIARCH_PROFILE_IPO})
+    endforeach()
     foreach(_config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
-        set_property(TARGET ${PKGNAME}_lib_v1
-            PROPERTY INTERPROCEDURAL_OPTIMIZATION_${_config} FALSE)
-        set_property(TARGET ${PKGNAME}_lib_v3
-            PROPERTY INTERPROCEDURAL_OPTIMIZATION_${_config} FALSE)
-        set_property(TARGET ${PKGNAME}_lib_v4
-            PROPERTY INTERPROCEDURAL_OPTIMIZATION_${_config} FALSE)
+        foreach(_profile v1 v3 v4)
+            set_property(TARGET ${PKGNAME}_lib_${_profile}
+                PROPERTY INTERPROCEDURAL_OPTIMIZATION_${_config}
+                ${DUCC0_MULTIARCH_PROFILE_IPO})
+        endforeach()
     endforeach()
 else()
     add_library(${PKGNAME}_lib OBJECT ${PYMOD_SOURCES} ${CXX_SOURCES})
