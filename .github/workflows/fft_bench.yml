@@ -1,6 +1,7 @@
 name: FFT benchmarks
 
-on: [workflow_dispatch, pull_request]
+on:
+  workflow_dispatch:
 
 jobs:
   benchmark:
@@ -8,58 +9,140 @@ jobs:
     env:
       DUCC0_OPTIMIZATION: multiarch-strip
       MPLBACKEND: Agg
+      FFT_BENCH_RUNNER_OS: ${{ runner.os }}
+      FFT_BENCH_CURRENT_SHA: ${{ github.sha }}
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
       - name: Install benchmark dependencies
-        run: python -m pip install --user --upgrade numpy scipy matplotlib pyfftw
+        run: python -m pip install --upgrade numpy scipy matplotlib pyfftw
 
-      - name: Build and install
-        run: python -m pip install --user .
-
-      - name: CPU info
-        id: cpu_info
-        run: python .github/scripts/check_cpu_info.py multiarch
-
-      - name: Benchmark usable profiles
-        env:
-          HAS_V3: ${{ steps.cpu_info.outputs.v3 }}
-          HAS_V4: ${{ steps.cpu_info.outputs.v4 }}
+      - name: Build isolated DUCC variants
         run: |
-          run_profile() {
-            level="$1"
-            profile="$2"
-            expected="$3"
-            export DUCC0_MAX_PSABI_LEVEL="$level"
+          baseline_source="$RUNNER_TEMP/ducc-baseline"
+          current_source="$RUNNER_TEMP/ducc-current"
+          no_lto_source="$RUNNER_TEMP/ducc-current-no-lto"
+          git worktree add --detach "$baseline_source" e41fa307d45b9df465f3429587658e37f3db3b4e
+          git worktree add --detach "$current_source" "$GITHUB_SHA"
+          git worktree add --detach "$no_lto_source" "$GITHUB_SHA"
+          test "$(git -C "$baseline_source" rev-parse HEAD)" = e41fa307d45b9df465f3429587658e37f3db3b4e
+          test "$(git -C "$current_source" rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C "$no_lto_source" rev-parse HEAD)" = "$GITHUB_SHA"
 
-            python -c 'import sys, ducc0; info = ducc0.misc.cpu_info(); assert info["active_profile"] == sys.argv[1], info; print(info)' "$expected"
-
-            for reference in fftw scipy numpy; do
-              output_dir="$GITHUB_WORKSPACE/fft-bench/$profile/$reference"
-              mkdir -p "$output_dir"
-              (
-                cd "$output_dir"
-                python "$GITHUB_WORKSPACE/python/demos/fft_bench.py" \
-                  --reference "$reference" --threads 1
-              )
-            done
+          build_variant() {
+            name="$1"
+            source="$2"
+            target="$RUNNER_TEMP/ducc-installs/$name"
+            mkdir -p "$target"
+            if [[ "$name" == current-no-lto ]]; then
+              env DUCC0_OPTIMIZATION=multiarch-strip DUCC0_ENABLE_LTO=OFF \
+                python -m pip install --no-deps --target "$target" "$source"
+            else
+              env -u DUCC0_ENABLE_LTO DUCC0_OPTIMIZATION=multiarch-strip \
+                python -m pip install --no-deps --target "$target" "$source"
+            fi
           }
 
-          mkdir -p fft-bench
-          run_profile 1 x86-64 x86-64
-          if [[ "$HAS_V3" == 'true' ]]; then
-            run_profile 3 x86-64-v3 x86-64-v3
-          fi
-          if [[ "$HAS_V4" == 'true' ]]; then
-            run_profile 4 x86-64-v4 x86-64-v4
-          fi
+          build_variant baseline "$baseline_source"
+          build_variant current "$current_source"
+          build_variant current-no-lto "$no_lto_source"
 
-      - name: Upload benchmark plots
+      - name: Check CPU profiles for each build
+        run: |
+          artifact_dir="$GITHUB_WORKSPACE/fft-bench"
+          cpu_dir="$artifact_dir/tables/cpu-info"
+          mkdir -p "$cpu_dir" "$artifact_dir/charts" "$artifact_dir/tables"
+          for variant in baseline current current-no-lto; do
+            env -u GITHUB_OUTPUT -u DUCC0_MAX_PSABI_LEVEL \
+              PYTHONPATH="$RUNNER_TEMP/ducc-installs/$variant" \
+              python .github/scripts/check_cpu_info.py multiarch \
+              > "$cpu_dir/$variant.json"
+          done
+
+          python - "$cpu_dir" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          cpu_dir = pathlib.Path(sys.argv[1])
+          names = ("baseline", "current", "current-no-lto")
+          infos = {name: json.loads((cpu_dir / (name + ".json")).read_text())
+                   for name in names}
+          available = [profile for profile in infos["baseline"]["available_profiles"]
+                       if all(profile in infos[name]["available_profiles"]
+                              for name in names)]
+          if any(info["available_profiles"] != available for info in infos.values()):
+              raise SystemExit("DUCC variants reported different available CPU profiles")
+          if "x86-64" not in available:
+              raise SystemExit("the v1 x86-64 profile must be available")
+          PY
+
+      - name: Assert and benchmark supported profiles
+        run: |
+          artifact_dir="$GITHUB_WORKSPACE/fft-bench"
+          cpu_dir="$artifact_dir/tables/cpu-info"
+          results="$artifact_dir/tables/results.jsonl"
+          cases=( $(python python/demos/fft_bench.py --list-cases) )
+          profiles=( $(python - "$cpu_dir" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          cpu_dir = pathlib.Path(sys.argv[1])
+          names = ("baseline", "current", "current-no-lto")
+          infos = [json.loads((cpu_dir / (name + ".json")).read_text())
+                   for name in names]
+          for level, profile in ((1, "x86-64"), (3, "x86-64-v3"),
+                                 (4, "x86-64-v4")):
+              if all(profile in info["available_profiles"] for info in infos):
+                  print("{}:{}".format(level, profile))
+          PY
+          ) )
+          variants=(baseline current current-no-lto)
+          case_index=0
+          for item in "${profiles[@]}"; do
+            level="${item%%:*}"
+            profile="${item#*:}"
+            for variant in "${variants[@]}"; do
+              PYTHONPATH="$RUNNER_TEMP/ducc-installs/$variant" \
+                DUCC0_MAX_PSABI_LEVEL="$level" python -c \
+                'import sys,ducc0; i=ducc0.misc.cpu_info(); assert i["active_profile"]==sys.argv[1], i; print(sys.argv[2], i)' \
+                "$profile" "$variant"
+            done
+            case_index=0
+            for case in "${cases[@]}"; do
+              # Rotate the per-case order so one build is not always first or last.
+              shift=$((case_index % 3))
+              for offset in 0 1 2; do
+                variant="${variants[$(((shift + offset) % 3))]}"
+                PYTHONPATH="$RUNNER_TEMP/ducc-installs/$variant" \
+                  DUCC0_MAX_PSABI_LEVEL="$level" \
+                  python python/demos/fft_bench.py \
+                    --reference all --case "$case" --threads 1 \
+                    --ntry 5 --nrepeat 5 --variant "$variant" \
+                    --profile "$profile" --output-jsonl "$results"
+              done
+              case_index=$((case_index + 1))
+            done
+          done
+
+      - name: Write Markdown summary and charts
+        if: always()
+        run: |
+          python .github/scripts/fft_bench_report.py \
+            --results "$GITHUB_WORKSPACE/fft-bench/tables/results.jsonl" \
+            --output-dir "$GITHUB_WORKSPACE/fft-bench" \
+            --cpu-info-dir "$GITHUB_WORKSPACE/fft-bench/tables/cpu-info" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark results
         if: always()
         uses: actions/upload-artifact@v7
         with:
