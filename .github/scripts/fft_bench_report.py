@@ -10,7 +10,9 @@ from importlib import metadata
 from pathlib import Path
 
 
-VARIANTS = ("baseline", "current", "current-no-lto")
+SAFE_VARIANTS = ("baseline", "current", "current-no-lto")
+LTO_VARIANT = "current-lto"
+VARIANTS = SAFE_VARIANTS + (LTO_VARIANT,)
 REFERENCES = ("fftw", "scipy", "numpy")
 PROFILES = ("x86-64", "x86-64-v3", "x86-64-v4")
 
@@ -70,6 +72,7 @@ def read_metadata(cpu_info_dir):
             "baseline": "e41fa307d45b9df465f3429587658e37f3db3b4e",
             "current": os.environ.get("FFT_BENCH_CURRENT_SHA", "unknown"),
             "current-no-lto": os.environ.get("FFT_BENCH_CURRENT_SHA", "unknown"),
+            "current-lto": os.environ.get("FFT_BENCH_CURRENT_SHA", "unknown"),
         },
     }
 
@@ -98,31 +101,36 @@ def grouped(records):
             for r in records}
 
 
-def make_charts(records, chart_dir):
+def make_charts(records, chart_dir, lto_built):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import numpy as np
 
     by_key = grouped(records)
-    complete_profiles = []
     cases = case_order()
-    for profile in PROFILES:
-        expected = [(ref, profile, variant, case) for ref in REFERENCES
-                    for variant in VARIANTS for case in cases]
-        if expected and all(key in by_key for key in expected):
-            complete_profiles.append(profile)
     chart_dir.mkdir(parents=True, exist_ok=True)
     chart_count = 0
     for reference in REFERENCES:
-        for profile in complete_profiles:
+        for profile in PROFILES:
+            safe_complete = all(
+                (reference, profile, variant, case) in by_key
+                for variant in SAFE_VARIANTS for case in cases)
+            if not safe_complete:
+                continue
+            variants = list(SAFE_VARIANTS)
+            lto_complete = all(
+                (reference, profile, LTO_VARIANT, case) in by_key
+                for case in cases)
+            if lto_built and lto_complete:
+                variants.append(LTO_VARIANT)
             x = np.arange(len(cases), dtype=float)
-            width = 0.25
+            width = 0.8 / len(variants)
             fig, ax = plt.subplots(figsize=(max(19, len(cases) * 0.95), 7.2))
-            for offset, variant in enumerate(VARIANTS):
+            for offset, variant in enumerate(variants):
                 values = [by_key[(reference, profile, variant, case)]["speedup"]
                           for case in cases]
-                ax.bar(x + (offset - 1) * width, values, width,
+                ax.bar(x + (offset - (len(variants) - 1) / 2) * width, values, width,
                        label=variant)
             ax.axhline(1.0, color="black", linewidth=1.0, linestyle="--")
             ax.set_ylabel("reference / DUCC speedup (>1 = DUCC faster)")
@@ -136,7 +144,7 @@ def make_charts(records, chart_dir):
                         dpi=140)
             plt.close(fig)
             chart_count += 1
-    return complete_profiles, chart_count
+    return chart_count
 
 
 def speedup_cell(record):
@@ -147,17 +155,55 @@ def speedup_cell(record):
             else "{:.2f}×".format(value))
 
 
-def table_for_reference(lines, reference, profile, cases, by_key):
+def table_for_reference(lines, reference, profile, cases, by_key, variants):
     lines.append("## {} — {}".format(reference.upper(), profile))
     lines.append("")
-    lines.append("| Case | Baseline | Current | Current no-LTO |")
-    lines.append("| --- | ---: | ---: | ---: |")
+    lines.append("| Case | {} |".format(" | ".join(variants)))
+    lines.append("| --- | {} |".format(" | ".join("---:" for _ in variants)))
     for case in cases:
         cells = [speedup_cell(by_key.get((reference, profile, variant, case)))
-                 for variant in VARIANTS]
-        lines.append("| {} | {} | {} | {} |".format(
-            case.replace("-", " "), *cells))
+                 for variant in variants]
+        lines.append("| {} | {} |".format(case.replace("-", " "),
+                                         " | ".join(cells)))
     lines.append("")
+
+
+def any_variant_record(by_key, profile, variant, case):
+    for reference in REFERENCES:
+        record = by_key.get((reference, profile, variant, case))
+        if record is not None:
+            return record
+    return None
+
+
+def lto_speedup_cell(no_lto, lto):
+    if no_lto is None or lto is None:
+        return "—"
+    if no_lto.get("shapes") != lto.get("shapes"):
+        return "—"
+    if lto["ducc_median_ms"] <= 0:
+        return "—"
+    return "{:.2f}×".format(no_lto["ducc_median_ms"] / lto["ducc_median_ms"])
+
+
+def lto_table(lines, profiles, cases, by_key):
+    lines.extend(("## Full multiarch LTO effect", ""))
+    lines.append("LTO speedup = current-no-lto DUCC median time / current-lto DUCC "
+                 "median time; `>1.0` means full LTO faster and `<1.0` means "
+                 "full LTO slower. Rows compare matched profile/case records "
+                 "and the same deterministic sample shapes.")
+    lines.append("")
+    for profile in profiles:
+        lines.append("### {}".format(profile))
+        lines.append("")
+        lines.append("| Case | LTO speedup |")
+        lines.append("| --- | ---: |")
+        for case in cases:
+            no_lto = any_variant_record(by_key, profile, "current-no-lto", case)
+            lto = any_variant_record(by_key, profile, LTO_VARIANT, case)
+            lines.append("| {} | {} |".format(
+                case.replace("-", " "), lto_speedup_cell(no_lto, lto)))
+        lines.append("")
 
 
 def isa_table(lines, cases, by_key, available_profiles):
@@ -230,21 +276,40 @@ def numpy_caveat(lines, records):
     lines.append("")
 
 
-def write_summary(summary_path, records, metadata_info, chart_count,
-                  complete_profiles):
+def write_summary(summary_path, records, metadata_info, chart_count):
     by_key = grouped(records)
     cases = case_order()
     cpu_info = metadata_info["cpu_info"]
-    available_by_variant = {
-        variant: info.get("available_profiles", [])
-        for variant, info in cpu_info.items()
-    }
-    if available_by_variant:
+    profile_order = {profile: index for index, profile in enumerate(PROFILES)}
+    observed_profiles = sorted(
+        {record["profile"] for record in records},
+        key=lambda profile: profile_order.get(profile, len(PROFILES)))
+    safe_cpu_info = [cpu_info.get(variant) for variant in SAFE_VARIANTS]
+    safe_capability_known = all(info is not None for info in safe_cpu_info)
+    if safe_capability_known:
+        all_build_cpu_info = list(cpu_info.values())
         available_profiles = [profile for profile in PROFILES
-                              if all(profile in values
-                                     for values in available_by_variant.values())]
+                              if all(profile in info.get("available_profiles", [])
+                                     for info in all_build_cpu_info)]
     else:
-        available_profiles = []
+        available_profiles = observed_profiles
+    lto_built = (LTO_VARIANT in cpu_info or
+                 any(record["variant"] == LTO_VARIANT for record in records))
+    reported_cpu_info = [info for info in cpu_info.values()]
+    runner_has_v4 = ("x86-64-v4" in available_profiles or
+                     "x86-64-v4" in observed_profiles or
+                     any("x86-64-v4" in info.get("available_profiles", [])
+                         for info in reported_cpu_info))
+    variants = SAFE_VARIANTS + ((LTO_VARIANT,) if lto_built else ())
+    source_commits = [
+        "baseline `{}`".format(metadata_info["source_commits"]["baseline"]),
+        "current/current-no-LTO `{}`".format(
+            metadata_info["source_commits"]["current"]),
+    ]
+    if lto_built:
+        source_commits.append("current-LTO `{}`".format(
+            metadata_info["source_commits"][LTO_VARIANT]))
+    source_commit_line = "- DUCC source commits: " + "; ".join(source_commits)
     cpu_summary = "; ".join(
         "{}: active `{}`, available `{}`".format(
             variant,
@@ -264,14 +329,21 @@ def write_summary(summary_path, records, metadata_info, chart_count,
         "builds on this runner. The ABI label applies only to the forced DUCC "
         "profile; reference libraries were not rebuilt or ISA-matched.",
         "",
+        "baseline and current use the existing safe multiarch build model, "
+        "where profile object libraries are built without IPO; `current` "
+        "keeps the existing default IPO-on setting for the final extension. "
+        "`baseline` vs `current` compares fft_tweaks under that model.",
+        "`current-lto` is a benchmark-only full-LTO multiarch build with IPO "
+        "on for profile objects and the final extension. `current-no-lto` "
+        "disables IPO for both. `current-lto` vs `current-no-lto` is the full "
+        "multiarch LTO experiment.",
+        "",
         "## Environment",
         "",
         "- Runner OS: `{}`".format(metadata_info["runner_os"]),
         "- Python: `{}`".format(metadata_info["python"]),
         "- Compiler: `{}`".format(metadata_info["compiler"]),
-        "- DUCC source commits: baseline `{}`, current/current-no-LTO `{}`".format(
-            metadata_info["source_commits"]["baseline"],
-            metadata_info["source_commits"]["current"]),
+        source_commit_line,
         "- NumPy: `{}`; SciPy: `{}`; pyFFTW: `{}`; Matplotlib: `{}`".format(
             metadata_info["packages"].get("numpy", "unknown"),
             metadata_info["packages"].get("scipy", "unknown"),
@@ -282,39 +354,69 @@ def write_summary(summary_path, records, metadata_info, chart_count,
             "`, `".join(available_profiles) if available_profiles else "unknown"),
         "- CPU/profile detection per DUCC build: " + cpu_summary,
         "",
-        "`current` keeps the default CMake IPO/LTO behavior. `current-no-lto` "
-        "uses the same source and build settings with only "
-        "`DUCC0_ENABLE_LTO=OFF`.",
-        "Existing multiarch profile object libraries retain their explicit "
-        "IPO-off setting in all three variants; the switch controls IPO for "
-        "the extension module target.",
-        "",
     ]
+    if lto_built:
+        lines.extend((
+            "The full-LTO variant is a diagnostic build and is not ABI-safe "
+            "evidence. Its configured v1/v3 dispatch labels indicate the "
+            "selected DUCC namespace, not proof that the linked code contains "
+            "only that psABI instruction level.",
+            "",
+        ))
     numpy_caveat(lines, records)
     if not records:
         lines.extend(("> No benchmark timing records were produced.", ""))
-    observed_profiles = sorted({record["profile"] for record in records},
-                               key=lambda profile: PROFILES.index(profile)
-                               if profile in PROFILES else len(PROFILES))
     expected_profiles = available_profiles or observed_profiles
     partial = any(
         (reference, profile, variant, case) not in by_key
         for profile in expected_profiles
         for reference in REFERENCES
-        for variant in VARIANTS
+        for variant in variants
         for case in cases)
     if partial:
         lines.extend(("> This run produced partial results. Missing entries are "
-                      "shown as em dashes, and charts are emitted only for a "
-                      "complete reference/profile comparison.", ""))
-    for profile in observed_profiles:
+                      "shown as em dashes. Charts are checked independently "
+                      "for each reference/profile pair.", ""))
+    summary_profiles = available_profiles or observed_profiles
+    for profile in summary_profiles:
         for reference in REFERENCES:
-            table_for_reference(lines, reference, profile, cases, by_key)
+            table_for_reference(lines, reference, profile, cases, by_key, variants)
     isa_table(lines, cases, by_key, available_profiles)
+    if safe_capability_known and not runner_has_v4:
+        lines.extend((
+            "## Full multiarch LTO effect",
+            "",
+            "Full multiarch LTO comparison skipped: this runner does not "
+            "support x86-64-v4, and the full-LTO build may contain v4 "
+            "instructions outside the v4 dispatch path.",
+            "",
+        ))
+    elif runner_has_v4 and lto_built:
+        lto_table(lines, available_profiles or observed_profiles, cases, by_key)
+    elif runner_has_v4:
+        lines.extend((
+            "## Full multiarch LTO effect",
+            "",
+            "Full multiarch LTO comparison unavailable: current-lto did not "
+            "produce CPU-profile metadata or timing records.",
+            "",
+        ))
+    else:
+        lines.extend((
+            "## Full multiarch LTO effect",
+            "",
+            "Full multiarch LTO comparison unavailable: runner profile "
+            "capability could not be determined from the safe builds.",
+            "",
+        ))
     lines.extend(("## Raw median timings", "",
                   "The artifact includes `tables/timings.csv` with DUCC and "
-                  "reference median milliseconds, observed ratio range, L2 "
-                  "error, sample shapes, and dtypes for every recorded row.", "",
+                  "reference aggregate median milliseconds, the primary "
+                  "speedup as the median of paired per-shape "
+                  "reference/DUCC ratios, observed paired ratio range, L2 "
+                  "error, sample shapes, and dtypes. Do not interpret the "
+                  "ratio of aggregate timing summaries as the primary "
+                  "speedup.", "",
                   "PNG charts generated: `{}` in the artifact `charts/` directory.".format(
                       chart_count), ""))
     summary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -341,10 +443,11 @@ def main():
             "w", encoding="utf-8") as output:
         json.dump(metadata_info, output, indent=2, sort_keys=True)
         output.write("\n")
-    complete_profiles, chart_count = make_charts(
-        records, output_dir / "charts") if records else ([], 0)
-    write_summary(Path(args.summary), records, metadata_info, chart_count,
-                  complete_profiles)
+    lto_built = (LTO_VARIANT in metadata_info["cpu_info"] or
+                 any(record["variant"] == LTO_VARIANT for record in records))
+    chart_count = (make_charts(records, output_dir / "charts", lto_built)
+                   if records else 0)
+    write_summary(Path(args.summary), records, metadata_info, chart_count)
 
 
 if __name__ == "__main__":

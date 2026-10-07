@@ -26,7 +26,7 @@ ducc0 = None
 MAX_EXTENTS = {1: 8192, 2: 2048, 3: 256}
 NICE_SIZES = True
 REFERENCES = ("fftw", "scipy", "numpy")
-VARIANTS = ("baseline", "current", "current-no-lto")
+VARIANTS = ("baseline", "current", "current-no-lto", "current-lto")
 PRECISIONS = {
     "c2c": (("c16", np.complex128), ("c8", np.complex64)),
     "r2c": (("f64", np.float64), ("f32", np.float32)),
@@ -259,7 +259,7 @@ def run_case(case, args):
             "nrepeat": args.nrepeat,
             "ducc_median_ms": ducc_median_ms,
             "reference_median_ms": reference_median_ms,
-            "speedup": reference_median_ms / ducc_median_ms,
+            "speedup": float(statistics.median(ratios)),
             "ratio_min": min(ratios),
             "ratio_max": max(ratios),
             "l2_error": max(sample["l2_error"] for sample in samples),

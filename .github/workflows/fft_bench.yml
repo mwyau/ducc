@@ -9,7 +9,6 @@ jobs:
     env:
       DUCC0_OPTIMIZATION: multiarch-strip
       MPLBACKEND: Agg
-      FFT_BENCH_RUNNER_OS: ${{ runner.os }}
       FFT_BENCH_CURRENT_SHA: ${{ github.sha }}
 
     steps:
@@ -24,7 +23,7 @@ jobs:
       - name: Install benchmark dependencies
         run: python -m pip install --upgrade numpy scipy matplotlib pyfftw
 
-      - name: Build isolated DUCC variants
+      - name: Build safe multiarch variants
         run: |
           baseline_source="$RUNNER_TEMP/ducc-baseline"
           current_source="$RUNNER_TEMP/ducc-current"
@@ -38,15 +37,15 @@ jobs:
 
           build_variant() {
             name="$1"
-            source="$2"
+            source_dir="$2"
             target="$RUNNER_TEMP/ducc-installs/$name"
             mkdir -p "$target"
             if [[ "$name" == current-no-lto ]]; then
               env DUCC0_OPTIMIZATION=multiarch-strip DUCC0_ENABLE_LTO=OFF \
-                python -m pip install --no-deps --target "$target" "$source"
+                python -m pip install --no-deps --target "$target" "$source_dir"
             else
               env -u DUCC0_ENABLE_LTO DUCC0_OPTIMIZATION=multiarch-strip \
-                python -m pip install --no-deps --target "$target" "$source"
+                python -m pip install --no-deps --target "$target" "$source_dir"
             fi
           }
 
@@ -54,7 +53,8 @@ jobs:
           build_variant current "$current_source"
           build_variant current-no-lto "$no_lto_source"
 
-      - name: Check CPU profiles for each build
+      - name: Detect profiles with safe builds
+        id: cpu_info
         run: |
           artifact_dir="$GITHUB_WORKSPACE/fft-bench"
           cpu_dir="$artifact_dir/tables/cpu-info"
@@ -66,7 +66,7 @@ jobs:
               > "$cpu_dir/$variant.json"
           done
 
-          python - "$cpu_dir" <<'PY'
+          python - "$cpu_dir" "$GITHUB_OUTPUT" <<'PY'
           import json
           import pathlib
           import sys
@@ -79,10 +79,34 @@ jobs:
                        if all(profile in infos[name]["available_profiles"]
                               for name in names)]
           if any(info["available_profiles"] != available for info in infos.values()):
-              raise SystemExit("DUCC variants reported different available CPU profiles")
+              raise SystemExit("safe DUCC variants reported different available profiles")
           if "x86-64" not in available:
               raise SystemExit("the v1 x86-64 profile must be available")
+          with open(sys.argv[2], "a", encoding="utf-8") as output:
+              print("v3={}".format(str("x86-64-v3" in available).lower()), file=output)
+              print("v4={}".format(str("x86-64-v4" in available).lower()), file=output)
+          print("Common safe-build profiles:", ", ".join(available))
           PY
+
+      - name: Build full multiarch LTO variant on v4 runners
+        if: steps.cpu_info.outputs.v4 == 'true'
+        run: |
+          lto_source="$RUNNER_TEMP/ducc-current-lto"
+          lto_target="$RUNNER_TEMP/ducc-installs/current-lto"
+          git worktree add --detach "$lto_source" "$GITHUB_SHA"
+          test "$(git -C "$lto_source" rev-parse HEAD)" = "$GITHUB_SHA"
+          mkdir -p "$lto_target"
+          env DUCC0_OPTIMIZATION=multiarch-strip DUCC0_ENABLE_LTO=ON \
+            python -m pip install --no-deps --target "$lto_target" "$lto_source"
+
+      - name: Detect profiles with full-LTO build
+        if: steps.cpu_info.outputs.v4 == 'true'
+        run: |
+          cpu_dir="$GITHUB_WORKSPACE/fft-bench/tables/cpu-info"
+          env -u GITHUB_OUTPUT -u DUCC0_MAX_PSABI_LEVEL \
+            PYTHONPATH="$RUNNER_TEMP/ducc-installs/current-lto" \
+            python .github/scripts/check_cpu_info.py multiarch \
+            > "$cpu_dir/current-lto.json"
 
       - name: Assert and benchmark supported profiles
         run: |
@@ -106,6 +130,10 @@ jobs:
           PY
           ) )
           variants=(baseline current current-no-lto)
+          if [[ -f "$cpu_dir/current-lto.json" ]]; then
+            variants+=(current-lto)
+          fi
+          variant_count="${#variants[@]}"
           case_index=0
           for item in "${profiles[@]}"; do
             level="${item%%:*}"
@@ -118,10 +146,10 @@ jobs:
             done
             case_index=0
             for case in "${cases[@]}"; do
-              # Rotate the per-case order so one build is not always first or last.
-              shift=$((case_index % 3))
-              for offset in 0 1 2; do
-                variant="${variants[$(((shift + offset) % 3))]}"
+              # Rotate each case's order so one build is not always first or last.
+              rotation=$((case_index % variant_count))
+              for offset in "${!variants[@]}"; do
+                variant="${variants[$(((rotation + offset) % variant_count))]}"
                 PYTHONPATH="$RUNNER_TEMP/ducc-installs/$variant" \
                   DUCC0_MAX_PSABI_LEVEL="$level" \
                   python python/demos/fft_bench.py \
@@ -136,6 +164,7 @@ jobs:
       - name: Write Markdown summary and charts
         if: always()
         run: |
+          export FFT_BENCH_RUNNER_OS="$RUNNER_OS"
           python .github/scripts/fft_bench_report.py \
             --results "$GITHUB_WORKSPACE/fft-bench/tables/results.jsonl" \
             --output-dir "$GITHUB_WORKSPACE/fft-bench" \
