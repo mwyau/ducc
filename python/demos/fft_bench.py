@@ -27,6 +27,11 @@ MAX_EXTENTS = {1: 8192, 2: 2048, 3: 256}
 NICE_SIZES = True
 REFERENCES = ("fftw", "scipy", "numpy")
 VARIANTS = ("baseline", "current", "current-no-lto", "current-lto")
+LTO_PROBE_CASE_IDS = (
+    "c2c-c16-1D-4095", "c2c-c16-1D-4096",
+    "c2c-c16-2D-64x4095", "c2c-c16-2D-64x4096",
+    "c2c-c16-2D-4095x64", "c2c-c16-2D-4096x64",
+)
 PRECISIONS = {
     "c2c": (("c16", np.complex128), ("c8", np.complex64)),
     "r2c": (("f64", np.float64), ("f32", np.float32)),
@@ -54,6 +59,19 @@ def make_cases():
             "precision": "c16",
             "dtype": np.dtype(np.complex128),
             "ndim": 2,
+            "fixed_shape": shape,
+        })
+    for shape in ((4095,), (4096,), (64, 4096), (4096, 64)):
+        if len(shape) == 1:
+            case_id = "c2c-c16-1D-{}".format(shape[0])
+        else:
+            case_id = "c2c-c16-2D-{}x{}".format(*shape)
+        cases.append({
+            "id": case_id,
+            "operation": "c2c",
+            "precision": "c16",
+            "dtype": np.dtype(np.complex128),
+            "ndim": len(shape),
             "fixed_shape": shape,
         })
     return cases
@@ -110,7 +128,7 @@ def call_ducc(operation, data, full_shape, out, nthreads):
                          forward=False, inorm=0, out=out, nthreads=nthreads)
 
 
-def measure_ducc(operation, data, full_shape, nrepeat, nthreads):
+def measure_ducc(operation, data, full_shape, nrepeat, nthreads, warmup=False):
     if operation == "c2c":
         out_dtype = data.dtype
     elif operation == "r2c":
@@ -118,6 +136,8 @@ def measure_ducc(operation, data, full_shape, nrepeat, nthreads):
     else:
         out_dtype = np.float64 if data.dtype == np.complex128 else np.float32
     out = np.empty(output_shape(operation, full_shape), dtype=out_dtype)
+    if warmup:
+        call_ducc(operation, data, full_shape, out, nthreads)
     times = []
     for _ in range(nrepeat):
         t0 = perf_counter()
@@ -204,7 +224,8 @@ def run_case(case, args):
     for sample_index in range(args.ntry):
         shape, data = make_input(case, sample_index, args.max_extent)
         ducc_times, ducc_result = measure_ducc(
-            case["operation"], data, shape, args.nrepeat, args.threads)
+            case["operation"], data, shape, args.nrepeat, args.threads,
+            warmup=case["fixed_shape"] is not None)
         expected_shape = output_shape(case["operation"], shape)
         if ducc_result.shape != expected_shape:
             raise RuntimeError("DUCC output shape {} != {} for {}".format(
@@ -270,18 +291,64 @@ def run_case(case, args):
     return records
 
 
+def run_lto_probe(case, args):
+    sample_medians = []
+    shapes = []
+    errors = []
+    for sample_index in range(args.ntry):
+        shape, data = make_input(case, sample_index, args.max_extent)
+        ducc_times, ducc_result = measure_ducc(
+            "c2c", data, shape, args.nrepeat, 1, warmup=True)
+        expected = np.fft.fftn(data, axes=tuple(range(len(shape))))
+        error = float(ducc0.misc.l2error(ducc_result, expected))
+        limit = 1e-10
+        if (ducc_result.shape != expected.shape or not np.isfinite(error)
+                or error > limit):
+            raise RuntimeError(
+                "{} numerical mismatch for {} shape {}: L2 error {} (limit {})".format(
+                    args.variant, case["id"], shape, error, limit))
+        sample_medians.append(float(statistics.median(ducc_times)) * 1000)
+        shapes.append(list(shape))
+        errors.append(error)
+
+    record = {
+        "variant": args.variant,
+        "profile": args.profile,
+        "reference": "ducc",
+        "diagnostic": "lto-regression-probe",
+        "case": case["id"],
+        "operation": "c2c",
+        "precision": "c16",
+        "ndim": case["ndim"],
+        "shapes": shapes,
+        "ntry": args.ntry,
+        "nrepeat": args.nrepeat,
+        "ducc_median_ms": float(statistics.median(sample_medians)),
+        "l2_error": max(errors),
+        "ducc_output_dtype": str(ducc_result.dtype),
+    }
+    print("  DUCC median={:.4f} ms; max L2={:.3g}".format(
+        record["ducc_median_ms"], record["l2_error"]), flush=True)
+    return record
+
+
 def main():
     parser = argparse.ArgumentParser(description="Compare DUCC FFT performance")
     parser.add_argument("--reference", choices=REFERENCES + ("all",),
                         default="fftw")
     parser.add_argument("--case", choices=tuple(CASE_BY_ID))
     parser.add_argument("--list-cases", action="store_true")
+    parser.add_argument("--list-lto-probe-cases", action="store_true")
+    parser.add_argument("--lto-probe", action="store_true",
+                        help="measure one fixed complex128 c2c LTO probe case")
     parser.add_argument("--threads", type=int, default=1)
     parser.add_argument("--ntry", type=int, default=10)
     parser.add_argument("--nrepeat", type=int, default=10)
     parser.add_argument("--max-extent", type=int,
                         help="reduce random case extents for quick local diagnostics")
-    parser.add_argument("--variant", choices=VARIANTS, default="current")
+    parser.add_argument("--variant",
+                        choices=VARIANTS + ("current-lto-forceinline",),
+                        default="current")
     parser.add_argument("--profile", default=None)
     parser.add_argument("--output-jsonl")
     args = parser.parse_args()
@@ -289,6 +356,10 @@ def main():
     if args.list_cases:
         for case in CASES:
             print(case["id"])
+        return
+    if args.list_lto_probe_cases:
+        for case_id in LTO_PROBE_CASE_IDS:
+            print(case_id)
         return
     if args.max_extent is not None and args.max_extent < 3:
         parser.error("--max-extent must be at least 3")
@@ -309,9 +380,24 @@ def main():
     if args.profile is None:
         args.profile = profile_info.get("active_profile", "non-multiarch")
     print("DUCC CPU info:", json.dumps(profile_info, sort_keys=True))
+    ducc0.misc.preallocate_memory(1)
+
+    if args.lto_probe:
+        if args.case not in LTO_PROBE_CASE_IDS:
+            parser.error("--lto-probe requires one of --list-lto-probe-cases")
+        if args.threads != 1:
+            parser.error("the focused LTO probe requires --threads 1")
+        print("LTO probe; case={}; variant={}; profile={}; ntry={}; nrepeat={}".format(
+            args.case, args.variant, args.profile, args.ntry, args.nrepeat),
+            flush=True)
+        record = run_lto_probe(CASE_BY_ID[args.case], args)
+        if args.output_jsonl:
+            with open(args.output_jsonl, "a", encoding="utf-8") as output:
+                output.write(json.dumps(record, sort_keys=True) + "\n")
+        return
+
     print("References: {}; threads: {}; variant: {}; profile: {}".format(
         ", ".join(args.references), args.threads, args.variant, args.profile))
-    ducc0.misc.preallocate_memory(1)
 
     cases = [CASE_BY_ID[args.case]] if args.case else CASES
     for case in cases:

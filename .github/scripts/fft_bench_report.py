@@ -12,9 +12,16 @@ from pathlib import Path
 
 SAFE_VARIANTS = ("baseline", "current", "current-no-lto")
 LTO_VARIANT = "current-lto"
+LTO_FORCEINLINE_VARIANT = "current-lto-forceinline"
 VARIANTS = SAFE_VARIANTS + (LTO_VARIANT,)
+CPU_INFO_VARIANTS = VARIANTS + (LTO_FORCEINLINE_VARIANT,)
 REFERENCES = ("fftw", "scipy", "numpy")
 PROFILES = ("x86-64", "x86-64-v3", "x86-64-v4")
+LTO_PROBE_CASES = (
+    "c2c-c16-1D-4095", "c2c-c16-1D-4096",
+    "c2c-c16-2D-64x4095", "c2c-c16-2D-64x4096",
+    "c2c-c16-2D-4095x64", "c2c-c16-2D-4096x64",
+)
 
 
 def case_order():
@@ -26,7 +33,7 @@ def case_order():
         for precision in precisions:
             cases.extend("{}-{}-{}D".format(operation, precision, ndim)
                          for ndim in (1, 2, 3))
-    cases.extend(("c2c-c16-2D-64x4095", "c2c-c16-2D-4095x64"))
+    cases.extend(LTO_PROBE_CASES)
     return cases
 
 
@@ -44,7 +51,7 @@ def read_records(path):
 
 def read_metadata(cpu_info_dir):
     cpu_info = {}
-    for variant in VARIANTS:
+    for variant in CPU_INFO_VARIANTS:
         path = cpu_info_dir / (variant + ".json")
         if path.exists():
             with path.open(encoding="utf-8") as source:
@@ -73,6 +80,22 @@ def read_metadata(cpu_info_dir):
             "current": os.environ.get("FFT_BENCH_CURRENT_SHA", "unknown"),
             "current-no-lto": os.environ.get("FFT_BENCH_CURRENT_SHA", "unknown"),
             "current-lto": os.environ.get("FFT_BENCH_CURRENT_SHA", "unknown"),
+            LTO_FORCEINLINE_VARIANT: os.environ.get(
+                "FFT_BENCH_CURRENT_SHA", "unknown"),
+        },
+        "workflow_status": {
+            "full_lto_build": os.environ.get(
+                "FFT_BENCH_FULL_LTO_BUILD_OUTCOME", "unavailable"),
+            "full_lto_import": os.environ.get(
+                "FFT_BENCH_FULL_LTO_IMPORT_OUTCOME", "unavailable"),
+            "full_lto_benchmark": os.environ.get(
+                "FFT_BENCH_FULL_LTO_BENCHMARK_OUTCOME", "unavailable"),
+            "forceinline_build": os.environ.get(
+                "FFT_BENCH_FORCEINLINE_BUILD_OUTCOME", "unavailable"),
+            "forceinline_import": os.environ.get(
+                "FFT_BENCH_FORCEINLINE_IMPORT_OUTCOME", "unavailable"),
+            "forceinline_probe": os.environ.get(
+                "FFT_BENCH_FORCEINLINE_PROBE_OUTCOME", "unavailable"),
         },
     }
 
@@ -206,6 +229,58 @@ def lto_table(lines, profiles, cases, by_key):
         lines.append("")
 
 
+def lto_probe_time(record):
+    return "—" if record is None else "{:.4f} ms".format(
+        record["ducc_median_ms"])
+
+
+def lto_probe_ratio(numerator, denominator):
+    if (numerator is None or denominator is None or
+            numerator.get("shapes") != denominator.get("shapes") or
+            denominator["ducc_median_ms"] <= 0):
+        return "—"
+    return "{:.2f}×".format(
+        numerator["ducc_median_ms"] / denominator["ducc_median_ms"])
+
+
+def lto_regression_table(lines, profiles, by_key, probe_records):
+    lines.extend(("## LTO regression probe", ""))
+    lines.append(
+        "Fixed complex128 c2c shapes bypass `good_size()`. DUCC medians use "
+        "matched deterministic inputs and warmed plans. `LTO slowdown` = "
+        "current-lto / current-no-lto (`>1` means full LTO is slower). "
+        "`Force recovery` = current-lto / current-lto-forceinline "
+        "(`>1` means force-inline is faster than full LTO). `Force / no-LTO` "
+        "= current-lto-forceinline / current-no-lto (`>1` means the probe "
+        "remains slower than no-LTO). The force-inline probe is excluded from "
+        "the reference-comparison charts.")
+    lines.append("")
+    probe_by_key = {
+        (record.get("profile"), record.get("case")): record
+        for record in probe_records
+        if record.get("variant") == LTO_FORCEINLINE_VARIANT
+    }
+    for profile in profiles:
+        lines.append("### {}".format(profile))
+        lines.append("")
+        lines.append(
+            "| Case | current-no-lto DUCC | current-lto DUCC | LTO slowdown | "
+            "current-lto-forceinline DUCC | Force recovery | Force / no-LTO |")
+        lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: |")
+        for case in LTO_PROBE_CASES:
+            no_lto = any_variant_record(
+                by_key, profile, "current-no-lto", case)
+            lto = any_variant_record(by_key, profile, LTO_VARIANT, case)
+            forceinline = probe_by_key.get((profile, case))
+            lines.append("| {} | {} | {} | {} | {} | {} | {} |".format(
+                case.replace("-", " "), lto_probe_time(no_lto),
+                lto_probe_time(lto), lto_probe_ratio(lto, no_lto),
+                lto_probe_time(forceinline),
+                lto_probe_ratio(lto, forceinline),
+                lto_probe_ratio(forceinline, no_lto)))
+        lines.append("")
+
+
 def isa_table(lines, cases, by_key, available_profiles):
     lines.extend(("## Current DUCC ISA scaling", ""))
     lines.append("Values are DUCC median time at v1 divided by the target profile; "
@@ -276,7 +351,7 @@ def numpy_caveat(lines, records):
     lines.append("")
 
 
-def write_summary(summary_path, records, metadata_info, chart_count):
+def write_summary(summary_path, records, probe_records, metadata_info, chart_count):
     by_key = grouped(records)
     cases = case_order()
     cpu_info = metadata_info["cpu_info"]
@@ -284,23 +359,27 @@ def write_summary(summary_path, records, metadata_info, chart_count):
     observed_profiles = sorted(
         {record["profile"] for record in records},
         key=lambda profile: profile_order.get(profile, len(PROFILES)))
+    observed_safe_profiles = sorted(
+        {record["profile"] for record in records
+         if record["variant"] in SAFE_VARIANTS},
+        key=lambda profile: profile_order.get(profile, len(PROFILES)))
     safe_cpu_info = [cpu_info.get(variant) for variant in SAFE_VARIANTS]
     safe_capability_known = all(info is not None for info in safe_cpu_info)
     if safe_capability_known:
-        all_build_cpu_info = list(cpu_info.values())
         available_profiles = [profile for profile in PROFILES
                               if all(profile in info.get("available_profiles", [])
-                                     for info in all_build_cpu_info)]
+                                     for info in safe_cpu_info)]
     else:
-        available_profiles = observed_profiles
+        available_profiles = observed_safe_profiles
     lto_built = (LTO_VARIANT in cpu_info or
                  any(record["variant"] == LTO_VARIANT for record in records))
-    reported_cpu_info = [info for info in cpu_info.values()]
     runner_has_v4 = ("x86-64-v4" in available_profiles or
-                     "x86-64-v4" in observed_profiles or
-                     any("x86-64-v4" in info.get("available_profiles", [])
-                         for info in reported_cpu_info))
+                     "x86-64-v4" in observed_safe_profiles)
     variants = SAFE_VARIANTS + ((LTO_VARIANT,) if lto_built else ())
+    forceinline_built = (
+        LTO_FORCEINLINE_VARIANT in cpu_info or
+        any(record.get("variant") == LTO_FORCEINLINE_VARIANT
+            for record in probe_records))
     source_commits = [
         "baseline `{}`".format(metadata_info["source_commits"]["baseline"]),
         "current/current-no-LTO `{}`".format(
@@ -309,6 +388,11 @@ def write_summary(summary_path, records, metadata_info, chart_count):
     if lto_built:
         source_commits.append("current-LTO `{}`".format(
             metadata_info["source_commits"][LTO_VARIANT]))
+    if forceinline_built:
+        source_commits.append(
+            "current-LTO-forceinline `{}` plus the benchmark-only "
+            "`detail_fft::special_mul` always-inline annotation".format(
+                metadata_info["source_commits"][LTO_FORCEINLINE_VARIANT]))
     source_commit_line = "- DUCC source commits: " + "; ".join(source_commits)
     cpu_summary = "; ".join(
         "{}: active `{}`, available `{}`".format(
@@ -344,13 +428,21 @@ def write_summary(summary_path, records, metadata_info, chart_count):
         "- Python: `{}`".format(metadata_info["python"]),
         "- Compiler: `{}`".format(metadata_info["compiler"]),
         source_commit_line,
+        "- Full-LTO build/import/benchmark outcomes: `{}` / `{}` / `{}`".format(
+            metadata_info["workflow_status"]["full_lto_build"],
+            metadata_info["workflow_status"]["full_lto_import"],
+            metadata_info["workflow_status"]["full_lto_benchmark"]),
+        "- Force-inline build/import/probe outcomes: `{}` / `{}` / `{}`".format(
+            metadata_info["workflow_status"]["forceinline_build"],
+            metadata_info["workflow_status"]["forceinline_import"],
+            metadata_info["workflow_status"]["forceinline_probe"]),
         "- NumPy: `{}`; SciPy: `{}`; pyFFTW: `{}`; Matplotlib: `{}`".format(
             metadata_info["packages"].get("numpy", "unknown"),
             metadata_info["packages"].get("scipy", "unknown"),
             metadata_info["packages"].get("pyFFTW", "unknown"),
             metadata_info["packages"].get("matplotlib", "unknown")),
         "- Compiled DUCC profiles: `x86-64`, `x86-64-v3`, `x86-64-v4`",
-        "- Available profiles (common to all builds): `{}`".format(
+        "- Available profiles (common to safe builds): `{}`".format(
             "`, `".join(available_profiles) if available_profiles else "unknown"),
         "- CPU/profile detection per DUCC build: " + cpu_summary,
         "",
@@ -409,6 +501,27 @@ def write_summary(summary_path, records, metadata_info, chart_count):
             "capability could not be determined from the safe builds.",
             "",
         ))
+    if runner_has_v4:
+        lto_regression_table(
+            lines, available_profiles or observed_safe_profiles,
+            by_key, probe_records)
+    elif safe_capability_known:
+        lines.extend((
+            "## LTO regression probe",
+            "",
+            "Fixed regression/control probe skipped: safe-build CPU detection "
+            "did not report x86-64-v4, which is required before importing "
+            "either full-LTO multiarch module.",
+            "",
+        ))
+    else:
+        lines.extend((
+            "## LTO regression probe",
+            "",
+            "Fixed regression/control probe unavailable because safe-build "
+            "CPU capability could not be determined.",
+            "",
+        ))
     lines.extend(("## Raw median timings", "",
                   "The artifact includes `tables/timings.csv` with DUCC and "
                   "reference aggregate median milliseconds, the primary "
@@ -427,6 +540,7 @@ def write_summary(summary_path, records, metadata_info, chart_count):
 def main():
     parser = argparse.ArgumentParser(description="Create FFT benchmark charts and Markdown")
     parser.add_argument("--results", required=True)
+    parser.add_argument("--probe-results")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--cpu-info-dir", required=True)
     parser.add_argument("--summary", required=True)
@@ -435,6 +549,8 @@ def main():
     results_path = Path(args.results)
     output_dir = Path(args.output_dir)
     records = read_records(results_path)
+    probe_records = (read_records(Path(args.probe_results))
+                     if args.probe_results else [])
     metadata_info = read_metadata(Path(args.cpu_info_dir))
     (output_dir / "tables").mkdir(parents=True, exist_ok=True)
     (output_dir / "charts").mkdir(parents=True, exist_ok=True)
@@ -447,7 +563,8 @@ def main():
                  any(record["variant"] == LTO_VARIANT for record in records))
     chart_count = (make_charts(records, output_dir / "charts", lto_built)
                    if records else 0)
-    write_summary(Path(args.summary), records, metadata_info, chart_count)
+    write_summary(Path(args.summary), records, probe_records,
+                  metadata_info, chart_count)
 
 
 if __name__ == "__main__":

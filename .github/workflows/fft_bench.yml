@@ -88,7 +88,9 @@ jobs:
           PY
 
       - name: Build full multiarch LTO variant on v4 runners
+        id: full_lto_build
         if: steps.cpu_info.outputs.v4 == 'true'
+        continue-on-error: true
         run: |
           lto_source="$RUNNER_TEMP/ducc-current-lto"
           lto_target="$RUNNER_TEMP/ducc-installs/current-lto"
@@ -99,20 +101,81 @@ jobs:
             python -m pip install --no-deps --target "$lto_target" "$lto_source"
 
       - name: Detect profiles with full-LTO build
-        if: steps.cpu_info.outputs.v4 == 'true'
+        id: full_lto_import
+        if: steps.cpu_info.outputs.v4 == 'true' && steps.full_lto_build.outcome == 'success'
+        continue-on-error: true
         run: |
           cpu_dir="$GITHUB_WORKSPACE/fft-bench/tables/cpu-info"
           env -u GITHUB_OUTPUT -u DUCC0_MAX_PSABI_LEVEL \
             PYTHONPATH="$RUNNER_TEMP/ducc-installs/current-lto" \
             python .github/scripts/check_cpu_info.py multiarch \
-            > "$cpu_dir/current-lto.json"
+            > "$cpu_dir/current-lto.json.tmp"
+          mv "$cpu_dir/current-lto.json.tmp" "$cpu_dir/current-lto.json"
+
+      - name: Build experimental full-LTO force-inline probe on v4 runners
+        id: forceinline_build
+        if: steps.cpu_info.outputs.v4 == 'true'
+        continue-on-error: true
+        run: |
+          source="$RUNNER_TEMP/ducc-current-lto-forceinline"
+          target="$RUNNER_TEMP/ducc-installs/current-lto-forceinline"
+          git worktree add --detach "$source" "$GITHUB_SHA"
+          test "$(git -C "$source" rev-parse HEAD)" = "$GITHUB_SHA"
+          python - "$source/src/ducc0/fft/fft.h" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          text = path.read_text()
+          old = "template<bool fwd, typename T, typename T2> void special_mul "
+          new = ("template<bool fwd, typename T, typename T2> "
+                 "[[gnu::always_inline]] inline void special_mul ")
+          if text.count(old) != 1:
+              raise SystemExit("expected one detail_fft::special_mul definition")
+          path.write_text(text.replace(old, new))
+          PY
+          test "$(git -C "$source" diff --name-only)" = "src/ducc0/fft/fft.h"
+          test "$(git -C "$source" diff --numstat)" = $'1\t1\tsrc/ducc0/fft/fft.h'
+          git -C "$source" diff --check
+          git -C "$source" diff -- src/ducc0/fft/fft.h \
+            > "$GITHUB_WORKSPACE/fft-bench/tables/current-lto-forceinline.patch"
+          mkdir -p "$target"
+          env DUCC0_OPTIMIZATION=multiarch-strip DUCC0_ENABLE_LTO=ON \
+            python -m pip install --no-deps --target "$target" "$source"
+
+      - name: Detect profiles with full-LTO force-inline probe
+        id: forceinline_import
+        if: steps.cpu_info.outputs.v4 == 'true' && steps.forceinline_build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          cpu_dir="$GITHUB_WORKSPACE/fft-bench/tables/cpu-info"
+          env -u GITHUB_OUTPUT -u DUCC0_MAX_PSABI_LEVEL \
+            PYTHONPATH="$RUNNER_TEMP/ducc-installs/current-lto-forceinline" \
+            python .github/scripts/check_cpu_info.py multiarch \
+            > "$cpu_dir/current-lto-forceinline.json.tmp"
+          mv "$cpu_dir/current-lto-forceinline.json.tmp" \
+            "$cpu_dir/current-lto-forceinline.json"
 
       - name: Assert and benchmark supported profiles
         run: |
           artifact_dir="$GITHUB_WORKSPACE/fft-bench"
           cpu_dir="$artifact_dir/tables/cpu-info"
           results="$artifact_dir/tables/results.jsonl"
-          cases=( $(python python/demos/fft_bench.py --list-cases) )
+          all_cases=( $(python python/demos/fft_bench.py --list-cases) )
+          probe_cases=( $(python python/demos/fft_bench.py --list-lto-probe-cases) )
+          cases=("${probe_cases[@]}")
+          for case in "${all_cases[@]}"; do
+            is_probe=0
+            for probe_case in "${probe_cases[@]}"; do
+              if [[ "$case" == "$probe_case" ]]; then
+                is_probe=1
+                break
+              fi
+            done
+            if [[ "$is_probe" == 0 ]]; then
+              cases+=("$case")
+            fi
+          done
           profiles=( $(python - "$cpu_dir" <<'PY'
           import json
           import pathlib
@@ -129,9 +192,6 @@ jobs:
           PY
           ) )
           variants=(baseline current current-no-lto)
-          if [[ -f "$cpu_dir/current-lto.json" ]]; then
-            variants+=(current-lto)
-          fi
           variant_count="${#variants[@]}"
           case_index=0
           for item in "${profiles[@]}"; do
@@ -160,12 +220,116 @@ jobs:
             done
           done
 
+      - name: Benchmark full-LTO multiarch variant
+        id: full_lto_benchmark
+        if: steps.cpu_info.outputs.v4 == 'true' && steps.full_lto_import.outcome == 'success'
+        continue-on-error: true
+        run: |
+          artifact_dir="$GITHUB_WORKSPACE/fft-bench"
+          cpu_dir="$artifact_dir/tables/cpu-info"
+          results="$artifact_dir/tables/results.jsonl"
+          all_cases=( $(python python/demos/fft_bench.py --list-cases) )
+          probe_cases=( $(python python/demos/fft_bench.py --list-lto-probe-cases) )
+          cases=("${probe_cases[@]}")
+          for case in "${all_cases[@]}"; do
+            is_probe=0
+            for probe_case in "${probe_cases[@]}"; do
+              if [[ "$case" == "$probe_case" ]]; then
+                is_probe=1
+                break
+              fi
+            done
+            if [[ "$is_probe" == 0 ]]; then
+              cases+=("$case")
+            fi
+          done
+          profiles=( $(python - "$cpu_dir" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          cpu_dir = pathlib.Path(sys.argv[1])
+          names = ("baseline", "current", "current-no-lto")
+          infos = [json.loads((cpu_dir / (name + ".json")).read_text())
+                   for name in names]
+          for level, profile in ((1, "x86-64"), (3, "x86-64-v3"),
+                                 (4, "x86-64-v4")):
+              if all(profile in info["available_profiles"] for info in infos):
+                  print("{}:{}".format(level, profile))
+          PY
+          ) )
+          for item in "${profiles[@]}"; do
+            level="${item%%:*}"
+            profile="${item#*:}"
+            PYTHONPATH="$RUNNER_TEMP/ducc-installs/current-lto" \
+              DUCC0_MAX_PSABI_LEVEL="$level" python -c \
+              'import sys,ducc0; i=ducc0.misc.cpu_info(); assert i["active_profile"]==sys.argv[1], i; print(sys.argv[2], i)' \
+              "$profile" current-lto
+            for case in "${cases[@]}"; do
+              PYTHONPATH="$RUNNER_TEMP/ducc-installs/current-lto" \
+                DUCC0_MAX_PSABI_LEVEL="$level" \
+                python python/demos/fft_bench.py \
+                  --reference all --case "$case" --threads 1 \
+                  --ntry 5 --nrepeat 5 --variant current-lto \
+                  --profile "$profile" --output-jsonl "$results"
+            done
+          done
+
+      - name: Run focused full-LTO force-inline probe
+        id: forceinline_probe
+        if: steps.cpu_info.outputs.v4 == 'true' && steps.forceinline_import.outcome == 'success'
+        continue-on-error: true
+        run: |
+          artifact_dir="$GITHUB_WORKSPACE/fft-bench"
+          cpu_dir="$artifact_dir/tables/cpu-info"
+          results="$artifact_dir/tables/lto-probe.jsonl"
+          probe_cases=( $(python python/demos/fft_bench.py --list-lto-probe-cases) )
+          profiles=( $(python - "$cpu_dir" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          cpu_dir = pathlib.Path(sys.argv[1])
+          names = ("baseline", "current", "current-no-lto")
+          infos = [json.loads((cpu_dir / (name + ".json")).read_text())
+                   for name in names]
+          for level, profile in ((1, "x86-64"), (3, "x86-64-v3"),
+                                 (4, "x86-64-v4")):
+              if all(profile in info["available_profiles"] for info in infos):
+                  print("{}:{}".format(level, profile))
+          PY
+          ) )
+          for item in "${profiles[@]}"; do
+            level="${item%%:*}"
+            profile="${item#*:}"
+            PYTHONPATH="$RUNNER_TEMP/ducc-installs/current-lto-forceinline" \
+              DUCC0_MAX_PSABI_LEVEL="$level" python -c \
+              'import sys,ducc0; i=ducc0.misc.cpu_info(); assert i["active_profile"]==sys.argv[1], i; print(sys.argv[2], i)' \
+              "$profile" current-lto-forceinline
+            for case in "${probe_cases[@]}"; do
+              PYTHONPATH="$RUNNER_TEMP/ducc-installs/current-lto-forceinline" \
+                DUCC0_MAX_PSABI_LEVEL="$level" \
+                python python/demos/fft_bench.py \
+                  --lto-probe --case "$case" --threads 1 \
+                  --ntry 5 --nrepeat 5 --variant current-lto-forceinline \
+                  --profile "$profile" --output-jsonl "$results"
+            done
+          done
+
       - name: Write Markdown summary and charts
         if: always()
+        env:
+          FFT_BENCH_FULL_LTO_BUILD_OUTCOME: ${{ steps.full_lto_build.outcome }}
+          FFT_BENCH_FULL_LTO_IMPORT_OUTCOME: ${{ steps.full_lto_import.outcome }}
+          FFT_BENCH_FULL_LTO_BENCHMARK_OUTCOME: ${{ steps.full_lto_benchmark.outcome }}
+          FFT_BENCH_FORCEINLINE_BUILD_OUTCOME: ${{ steps.forceinline_build.outcome }}
+          FFT_BENCH_FORCEINLINE_IMPORT_OUTCOME: ${{ steps.forceinline_import.outcome }}
+          FFT_BENCH_FORCEINLINE_PROBE_OUTCOME: ${{ steps.forceinline_probe.outcome }}
         run: |
           export FFT_BENCH_RUNNER_OS="$RUNNER_OS"
           python .github/scripts/fft_bench_report.py \
             --results "$GITHUB_WORKSPACE/fft-bench/tables/results.jsonl" \
+            --probe-results "$GITHUB_WORKSPACE/fft-bench/tables/lto-probe.jsonl" \
             --output-dir "$GITHUB_WORKSPACE/fft-bench" \
             --cpu-info-dir "$GITHUB_WORKSPACE/fft-bench/tables/cpu-info" \
             --summary "$GITHUB_STEP_SUMMARY"
