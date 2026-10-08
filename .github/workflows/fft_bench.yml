@@ -1,0 +1,63 @@
+name: FFT factorial benchmark
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fft-factorial-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Check out the actual PR head or manually selected branch commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned benchmark and build dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          numpy==2.5.3 scipy==1.18.1 pyFFTW==0.15.1 matplotlib==3.11.2
+          nanobind==3.0.1 pybind11==3.1.0 scikit-build-core==1.0.3
+          cmake==4.4.3 ninja==1.13.2
+
+      - name: Build, audit ISA isolation, and run the full 2×2×2 matrix
+        env:
+          FFT_FACTORIAL_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PYTHONHASHSEED: "0"
+          MPLBACKEND: Agg
+        run: >-
+          python .github/scripts/fft_factorial_run.py
+          --output-dir "$GITHUB_WORKSPACE/fft-factorial-results"
+          --worktree-root "$RUNNER_TEMP/fft-factorial-source"
+          --ntry 3 --nrepeat 5 --jobs 4
+
+      - name: Write the complete Markdown report to the Actions summary
+        if: always()
+        env:
+          FFT_FACTORIAL_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          python .github/scripts/fft_factorial_report.py
+          --output-dir "$GITHUB_WORKSPACE/fft-factorial-results"
+          --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report, charts, raw timings, and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fft-factorial-results
+          path: fft-factorial-results/
+          if-no-files-found: warn
