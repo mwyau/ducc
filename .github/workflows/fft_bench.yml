@@ -1,4 +1,4 @@
-name: FFT factorial benchmark
+name: FFT inline/tweaks benchmark
 
 on:
   pull_request:
@@ -8,13 +8,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: fft-factorial-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: fft-inline-tweaks-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   benchmark:
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 180
     steps:
       - name: Check out the actual PR head or manually selected branch commit
         uses: actions/checkout@v7
@@ -34,7 +34,27 @@ jobs:
           nanobind==3.0.1 pybind11==3.1.0 scikit-build-core==1.0.3
           cmake==4.4.3 ninja==1.13.2
 
-      - name: Build, audit ISA isolation, and run the full 2×2×2 matrix
+      - name: Verify four-variant matrix and compile benchmark scripts
+        run: |
+          python -m compileall -q .github/scripts
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, ".github/scripts")
+          from prepare_factorial_sources import CONFIGS
+          from fft_factorial_benchmark import CASES
+          from fft_factorial_report import VARIANT_IDS
+          expected = [
+              (False, False), (True, False),
+              (False, True), (True, True),
+          ]
+          assert len(CONFIGS) == 4 and len(CASES) == 24
+          assert VARIANT_IDS == ("A", "B", "C", "D")
+          assert [(v["special_mul_fix"], v["fft_tweaks"]) for v in CONFIGS] == expected
+          assert all("profile_lto" not in v for v in CONFIGS)
+          print("Four-source-variant / 24-case matrix verified.")
+          PY
+
+      - name: Build and benchmark all four inline/tweaks variants
         env:
           FFT_FACTORIAL_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           PYTHONHASHSEED: "0"
@@ -58,6 +78,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: fft-factorial-results
+          name: fft-inline-tweaks-results
           path: fft-factorial-results/
           if-no-files-found: warn

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render complete Markdown, CSV, and compact reference/DUCC heatmaps."""
+"""Render complete four-variant Markdown, CSV, and reference/DUCC heatmaps."""
 
 from __future__ import annotations
 
@@ -175,38 +175,16 @@ def absolute_rows(ducc, profile: str, cases=CASES):
 
 
 def effect_rows(ducc, profile: str, factor: str):
-    rows = []
-    for case in CASES:
-        values = []
-        if factor == "lto":
-            combos = [(inline, tweaks) for inline in (False, True)
-                      for tweaks in (False, True)]
-            for inline, tweaks in combos:
-                off = next(c["id"] for c in CONFIGS if not c["profile_lto"]
-                           and c["special_mul_fix"] == inline and c["fft_tweaks"] == tweaks)
-                on = next(c["id"] for c in CONFIGS if c["profile_lto"]
-                          and c["special_mul_fix"] == inline and c["fft_tweaks"] == tweaks)
-                values.append(ratio_cell(factor_ratio(ducc, profile, case["id"], off, on)))
-        elif factor == "inline":
-            combos = [(lto, tweaks) for lto in (False, True)
-                      for tweaks in (False, True)]
-            for lto, tweaks in combos:
-                off = next(c["id"] for c in CONFIGS if c["profile_lto"] == lto
-                           and not c["special_mul_fix"] and c["fft_tweaks"] == tweaks)
-                on = next(c["id"] for c in CONFIGS if c["profile_lto"] == lto
-                          and c["special_mul_fix"] and c["fft_tweaks"] == tweaks)
-                values.append(ratio_cell(factor_ratio(ducc, profile, case["id"], off, on)))
-        else:
-            combos = [(lto, inline) for lto in (False, True)
-                      for inline in (False, True)]
-            for lto, inline in combos:
-                off = next(c["id"] for c in CONFIGS if c["profile_lto"] == lto
-                           and c["special_mul_fix"] == inline and not c["fft_tweaks"])
-                on = next(c["id"] for c in CONFIGS if c["profile_lto"] == lto
-                          and c["special_mul_fix"] == inline and c["fft_tweaks"])
-                values.append(ratio_cell(factor_ratio(ducc, profile, case["id"], off, on)))
-        rows.append([case["id"], *values])
-    return rows
+    """Paired speedups for the inline or FFT-tweak factor, conditioned on the other."""
+    if factor == "inline":
+        pairs = (("A", "B"), ("C", "D"))
+    elif factor == "tweaks":
+        pairs = (("A", "C"), ("B", "D"))
+    else:
+        raise ValueError(f"unknown factorial effect: {factor}")
+    return [[case["id"], *[
+        ratio_cell(factor_ratio(ducc, profile, case["id"], off, on))
+        for off, on in pairs]] for case in CASES]
 
 
 def _paired_ratio_of_factor_ratios(ducc, profile, case_id,
@@ -240,69 +218,17 @@ def _paired_ratio_of_factor_ratios(ducc, profile, case_id,
 
 
 def interaction_rows(ducc, profile: str):
+    """Whether FFT tweaks change the inline-fix benefit; all pairs are matched."""
     rows = []
     for case in CASES:
         cid = case["id"]
-        values = []
-        # Inline ON/OFF changes the LTO speedup; show both FFT-tweak states.
-        for tweaks in (False, True):
-            nofix_no_lto = next(c["id"] for c in CONFIGS if not c["profile_lto"]
-                                and not c["special_mul_fix"] and c["fft_tweaks"] == tweaks)
-            nofix_lto = next(c["id"] for c in CONFIGS if c["profile_lto"]
-                             and not c["special_mul_fix"] and c["fft_tweaks"] == tweaks)
-            fix_no_lto = next(c["id"] for c in CONFIGS if not c["profile_lto"]
-                              and c["special_mul_fix"] and c["fft_tweaks"] == tweaks)
-            fix_lto = next(c["id"] for c in CONFIGS if c["profile_lto"]
-                           and c["special_mul_fix"] and c["fft_tweaks"] == tweaks)
-            values.append(ratio_cell(_paired_ratio_of_factor_ratios(
-                ducc, profile, cid, fix_no_lto, fix_lto, nofix_no_lto, nofix_lto)))
-
-        # FFT tweaks change the LTO speedup; show both inline-fix states.
-        for inline in (False, True):
-            no_tweak_no_lto = next(c["id"] for c in CONFIGS if not c["profile_lto"]
-                                   and c["special_mul_fix"] == inline and not c["fft_tweaks"])
-            no_tweak_lto = next(c["id"] for c in CONFIGS if c["profile_lto"]
-                                and c["special_mul_fix"] == inline and not c["fft_tweaks"])
-            tweak_no_lto = next(c["id"] for c in CONFIGS if not c["profile_lto"]
-                                and c["special_mul_fix"] == inline and c["fft_tweaks"])
-            tweak_lto = next(c["id"] for c in CONFIGS if c["profile_lto"]
-                             and c["special_mul_fix"] == inline and c["fft_tweaks"])
-            values.append(ratio_cell(_paired_ratio_of_factor_ratios(
-                ducc, profile, cid, tweak_no_lto, tweak_lto,
-                no_tweak_no_lto, no_tweak_lto)))
-
-        # FFT tweaks change the inline-fix effect; show both LTO states.
-        for lto in (False, True):
-            no_tweak_pre = next(c["id"] for c in CONFIGS if c["profile_lto"] == lto
-                                and not c["special_mul_fix"] and not c["fft_tweaks"])
-            no_tweak_fix = next(c["id"] for c in CONFIGS if c["profile_lto"] == lto
-                                and c["special_mul_fix"] and not c["fft_tweaks"])
-            tweak_pre = next(c["id"] for c in CONFIGS if c["profile_lto"] == lto
-                             and not c["special_mul_fix"] and c["fft_tweaks"])
-            tweak_fix = next(c["id"] for c in CONFIGS if c["profile_lto"] == lto
-                             and c["special_mul_fix"] and c["fft_tweaks"])
-            values.append(ratio_cell(_paired_ratio_of_factor_ratios(
-                ducc, profile, cid, tweak_pre, tweak_fix, no_tweak_pre, no_tweak_fix)))
-
-        # Compare H/A with a multiplicative prediction from the three A-only effects.
-        a_to_e = _paired_samples(_rows_for(ducc, profile, cid, "A"),
-                                 _rows_for(ducc, profile, cid, "E"))
-        a_to_b = _paired_samples(_rows_for(ducc, profile, cid, "A"),
-                                 _rows_for(ducc, profile, cid, "B"))
-        a_to_c = _paired_samples(_rows_for(ducc, profile, cid, "A"),
-                                 _rows_for(ducc, profile, cid, "C"))
-        a_to_h = _paired_samples(_rows_for(ducc, profile, cid, "A"),
-                                 _rows_for(ducc, profile, cid, "H"))
-        triple = None
-        if all(items is not None for items in (a_to_e, a_to_b, a_to_c, a_to_h)):
-            if len({len(items) for items in (a_to_e, a_to_b, a_to_c, a_to_h)}) == 1:
-                triple = median_or_none([
-                    observed / (lto * inline * tweaks)
-                    for observed, lto, inline, tweaks in zip(a_to_h, a_to_b, a_to_e, a_to_c)
-                    if min(observed, lto, inline, tweaks) > 0
-                ])
-        values.append(ratio_cell(triple))
-        rows.append([cid, *values])
+        no_tweak = factor_ratio(ducc, profile, cid, "A", "B")
+        tweaked = factor_ratio(ducc, profile, cid, "C", "D")
+        interaction = _paired_ratio_of_factor_ratios(
+            ducc, profile, cid, "C", "D", "A", "B")
+        combined = factor_ratio(ducc, profile, cid, "A", "D")
+        rows.append([cid, ratio_cell(no_tweak), ratio_cell(tweaked),
+                     ratio_cell(interaction), ratio_cell(combined)])
     return rows
 
 
@@ -466,7 +392,7 @@ def make_report(output_dir: Path) -> tuple[str, int]:
                      supported, int(status.get("ntry", 3)), status.get("variants", {}))
     charts = build_charts(ducc, references, output_dir / "charts", supported)
 
-    lines = ["# FFT factorial benchmark report", ""]
+    lines = ["# FFT inline-fix × FFT-tweaks benchmark report", ""]
     lines.extend(["## A. Executive overview", ""])
     cpu_info = status.get("cpu_info", {})
     cpu_identity = None
@@ -491,20 +417,19 @@ def make_report(output_dir: Path) -> tuple[str, int]:
         f"- **Supported profiles:** {profiles_text}; **skipped:** {skipped_text}.",
         f"- **Benchmark cases:** {len(CASES)} operation/precision/dimension or fixed-shape cases per supported profile.",
         f"- **Factorial cells:** {expected} expected, {completed} fully timed, {failed} with correctness failures, {incomplete} incomplete.",
-        f"- **LTO implementation:** profile-local LTO with three independent native `nolto-rel` partial links and a non-LTO final extension link; no combined cross-profile LTO.",
-        f"- **ISA isolation:** "
-        f"{'passed for every buildable configuration' if all(v.get('isa_validation') == 'pass' for v in status.get('variants', {}).values()) else 'incomplete or failed; see build diagnostics'}.",
+        f"- **LTO:** disabled for all four variants; upstream multiarch profile objects are linked directly.",
+        f"- **Static ISA checks:** "
+        f"{'passed for all four configurations' if len(status.get('variants', {})) == 4 and all(v.get('isa_validation') == 'pass' for v in status.get('variants', {}).values()) else 'incomplete or failed; see build diagnostics'}; these are not a comprehensive runtime ISA proof.",
         f"- **Run status:** `{status.get('overall_status', 'unavailable')}`.",
-        f"- **Build workload:** `ntry={status.get('ntry', 3)}`, `nrepeat={status.get('nrepeat', 5)}`, one thread; references are timed once per profile/case/sample and reused across A–H.",
-        f"- **Elapsed time:** source preparation {cell(status.get('source_preparation_seconds'), 1)} s; eight builds and audits {cell(status.get('build_loop_seconds'), 1)} s; benchmark {cell(status.get('benchmark_seconds'), 1)} s; total {cell(status.get('total_run_seconds'), 1)} s.",
+        f"- **Build workload:** `ntry={status.get('ntry', 3)}`, `nrepeat={status.get('nrepeat', 5)}`, one thread; references are timed once per profile/case/sample and reused across A–D.",
+        f"- **Elapsed time:** source preparation {cell(status.get('source_preparation_seconds'), 1)} s; four builds and audits {cell(status.get('build_loop_seconds'), 1)} s; benchmark {cell(status.get('benchmark_seconds'), 1)} s; total {cell(status.get('total_run_seconds'), 1)} s.",
         "",
         "Configuration IDs used throughout:",
         "",
     ])
     lines.extend(markdown_table(
-        ["ID", "Profile LTO", "special_mul inline fix", "FFT tweaks", "Label"],
-        [[c["id"], "ON" if c["profile_lto"] else "OFF",
-          "ON" if c["special_mul_fix"] else "OFF",
+        ["ID", "special_mul inline fix", "FFT tweaks", "Label"],
+        [[c["id"], "ON" if c["special_mul_fix"] else "OFF",
           "ON" if c["fft_tweaks"] else "OFF", c["label"]]
          for c in CONFIGS], align_right={0}))
     lines.append("")
@@ -514,7 +439,7 @@ def make_report(output_dir: Path) -> tuple[str, int]:
     for profile in supported:
         lines.append(f"### {profile}")
         lines.append("")
-        lines.append("Columns A–H use the configuration definitions immediately above this section.")
+        lines.append("Columns A–D use the configuration definitions immediately above this section.")
         lines.append("")
         lines.extend(markdown_table(["Case", *VARIANT_IDS], absolute_rows(ducc, profile)))
         lines.append("")
@@ -522,46 +447,35 @@ def make_report(output_dir: Path) -> tuple[str, int]:
         lines.append("No ISA profile was available to execute on this runner.")
         lines.append("")
 
-    lines.extend(["## C. LTO effect tables", "",
-                  "Each cell is the paired per-sample ratio `LTO OFF time / profile-local LTO time`; `>1` means profile-local LTO is faster. Columns condition on the inline-fix and FFT-tweaks states.", ""])
+    lines.extend(["## C. special_mul inline-fix effects", "",
+                  "Each cell is paired `pre-inline-fix time / post-inline-fix time`; `>1` means the fix is faster. The two columns isolate the inline change with and without FFT tweaks.", ""])
     for profile in supported:
-        headers = ["Case", "Inline OFF, tweaks OFF", "Inline ON, tweaks OFF",
-                   "Inline OFF, tweaks ON", "Inline ON, tweaks ON"]
-        add_case_table(lines, profile, headers, effect_rows(ducc, profile, "lto"))
+        add_case_table(lines, profile,
+                       ["Case", "Without FFT tweaks (A/B)", "With FFT tweaks (C/D)"],
+                       effect_rows(ducc, profile, "inline"))
 
-    lines.extend(["## D. special_mul inline-fix effect tables", "",
-                  "Each cell is `pre-inline-fix time / post-inline-fix time`; `>1` means retaining the upstream always-inline fix is faster. Columns condition on profile LTO and FFT tweaks.", ""])
+    lines.extend(["## D. FFT-tweaks effects", "",
+                  "Each cell is paired `without-tweaks time / with-tweaks time`; `>1` means the tweaks are faster. The two columns condition on the inline fix.", ""])
     for profile in supported:
-        headers = ["Case", "LTO OFF, tweaks OFF", "LTO OFF, tweaks ON",
-                   "LTO ON, tweaks OFF", "LTO ON, tweaks ON"]
-        add_case_table(lines, profile, headers, effect_rows(ducc, profile, "inline"))
+        add_case_table(lines, profile,
+                       ["Case", "Inline fix OFF (A/C)", "Inline fix ON (B/D)"],
+                       effect_rows(ducc, profile, "tweaks"))
 
-    lines.extend(["## E. FFT-tweaks effect tables", "",
-                  "Each cell is `without-tweaks time / with-tweaks time`; `>1` means the FFT tweaks are faster. Columns condition on profile LTO and inline-fix state.", ""])
+    lines.extend(["## E. Interaction and fixed regression probes", "",
+                  "Interaction is `(C/D)/(A/B)`, computed on matched samples; `>1` means FFT tweaks amplify the inline-fix speedup. Combined effect is `A/D`; `>1` means the combined build is faster than the untreated baseline.", ""])
+    fixed = [case for case in CASES if case["fixed_shape"] is not None]
     for profile in supported:
-        headers = ["Case", "LTO OFF, inline OFF", "LTO OFF, inline ON",
-                   "LTO ON, inline OFF", "LTO ON, inline ON"]
-        add_case_table(lines, profile, headers, effect_rows(ducc, profile, "tweaks"))
-
-    lines.extend(["## F. Interactions and fixed regression probes", "",
-                  "Interaction values are paired ratios of conditional factor ratios, calculated per sample before taking the median. A value above 1 means the first named state increases the second factor's speedup. The final column compares the observed H-versus-A speedup with a multiplicative no-interaction prediction from A's three one-factor effects.", ""])
-    interaction_headers = [
-        "Case", "Inline × LTO, tweaks OFF", "Inline × LTO, tweaks ON",
-        "Tweaks × LTO, inline OFF", "Tweaks × LTO, inline ON",
-        "Tweaks × inline, LTO OFF", "Tweaks × inline, LTO ON",
-        "H observed / independent prediction",
-    ]
-    for profile in supported:
-        add_case_table(lines, f"{profile} interactions", interaction_headers,
-                       interaction_rows(ducc, profile),
-                       "For the pairwise columns, `>1` means the first factor increases the second factor's speedup. For `H observed / independent prediction`, `>1` means H is faster than the prediction from the three A-only effects.")
-        fixed = [case for case in CASES if case["fixed_shape"] is not None]
+        add_case_table(lines, f"{profile} inline/tweaks interaction",
+                       ["Case", "Inline fix, no tweaks (A/B)",
+                        "Inline fix, tweaks ON (C/D)",
+                        "Tweaks × inline interaction", "Combined gain (A/D)"],
+                       interaction_rows(ducc, profile))
         add_case_table(lines, f"{profile} fixed complex128 c2c controls",
-                       ["Fixed shape (never passed to good_size)", *VARIANT_IDS],
+                       ["Fixed shape (not rounded)", *VARIANT_IDS],
                        absolute_rows(ducc, profile, fixed),
-                       "The six fixed controls are 4095, 4096, (64,4095), (64,4096), (4095,64), and (4096,64).")
+                       "Fixed 4095/4096 1D and both 2D orientations, without good_size rounding.")
 
-    for reference, section in (("fftw", "G"), ("scipy", "H"), ("numpy", "I")):
+    for reference, section in (("fftw", "F"), ("scipy", "G"), ("numpy", "H")):
         lines.extend([f"## {section}. {reference.upper()} comparisons", "",
                       f"Cells show `{reference.upper()} time / DUCC time`, paired by deterministic sample and shape; `>1` means DUCC is faster. Values are medians of per-sample ratios, not ratios of aggregate medians. The ISA label identifies the matched DUCC profile cap; reference packages use their normal installed builds and are not ISA-matched.", ""])
         for profile in supported:
@@ -581,7 +495,7 @@ def make_report(output_dir: Path) -> tuple[str, int]:
                 dtype_rows(timings, references_raw)))
             lines.append("")
 
-    lines.extend(["## J. ISA scaling", "",
+    lines.extend(["## I. ISA scaling", "",
                   "Cells use paired direct DUCC ratios: `v1 time / v3 time`, `v1 time / v4 time`, and `v3 time / v4 time`; `>1` means the higher profile is faster. A comparison is available only when both profiles ran on this same runner with matching shapes and input hashes.", ""])
     for upper, lower, title in (("x86-64-v3", "x86-64", "v3 vs v1"),
                                 ("x86-64-v4", "x86-64", "v4 vs v1"),
@@ -597,133 +511,58 @@ def make_report(output_dir: Path) -> tuple[str, int]:
         add_case_table(lines, f"{title}: {upper} / {lower}", headers, rows,
                        "The entire comparison is marked unavailable because at least one profile was unsupported on this runner." if not (upper in supported and lower in supported) else "")
 
-    lines.extend(["## K. Build diagnostics", ""])
-    lines.append(f"FFT tweak source patch SHA-256: `{manifest.get('fft_tweaks_provenance', {}).get('source_patch_sha256', 'unavailable')}`. The algorithm patch applies only to `fft1d_impl.h` and `fftnd_impl.h`; `DUCC0_NAMESPACE` remains defined by the pinned upstream source. The historical benchmark-only tweak commit is excluded.")
-    lines.append("")
-    lines.append(f"Benchmark CMake helper SHA-256: `{load_json(output_dir / 'patch-provenance.json', {}).get('profile_local_lto_helper_sha256', 'unavailable')}`. LTO ON builds compile each profile's translation units with its exact `-march` and LTO, partial-link only that profile using GCC `-r -flto -flto-partition=none -flinker-output=nolto-rel`, then link three native outputs with baseline dispatcher objects and `-fno-lto`.")
-    lines.append("")
-    lines.append("The baseline dispatcher contains one upstream `xgetbv` probe to read OS vector-state support. The audit confirms both CPUID XSAVE and OSXSAVE bits are checked before the probe; profile code contains no CPU-detection probe.")
+    lines.extend(["## J. Build diagnostics", "",
+                  "All four builds use the upstream direct multiarch profile-object link with LTO disabled. The temporary CMake worktree edit only turns global IPO off; it does not alter the committed upstream build.", ""])
+    lines.append(f"FFT tweak patch SHA-256: `{manifest.get('fft_tweaks_provenance', {}).get('source_patch_sha256', 'unavailable')}`. Algorithm differences are limited to `fft1d_impl.h` and `fftnd_impl.h`; the inline factor changes only the `detail_fft::special_mul` annotation.")
     lines.append("")
     build_rows = []
     for config in CONFIGS:
         state = status.get("variants", {}).get(config["id"], {})
         build = state.get("build_diagnostics", {})
-        iso = state.get("build_isolation", "unavailable")
-        isa = state.get("isa_validation", "unavailable")
         build_rows.append([
             config["id"], state.get("build", "unavailable"),
-            "profile-local" if config["profile_lto"] else "off",
             f"{build.get('total_build_seconds', 0):.1f}" if build.get("total_build_seconds") else "—",
             str(build.get("extension_size_bytes", "—")),
-            str(build.get("warning_count", "—")), iso, isa,
+            str(build.get("warning_count", "—")),
+            state.get("build_isolation", "unavailable"),
+            state.get("isa_validation", "unavailable"),
         ])
     lines.extend(markdown_table(
-        ["ID", "Build", "Actual LTO", "Build seconds", "Extension bytes",
-         "Compiler warnings", "Link checks", "ISA checks"], build_rows))
+        ["ID", "Build", "Build seconds", "Extension bytes",
+         "Compiler warnings", "No-LTO link checks", "Static ISA checks"], build_rows))
     lines.append("")
     for config in CONFIGS:
         diag = build_diagnostics.get(config["id"], {})
         if diag.get("command_validation"):
-            lines.append(f"- **{config['id']} commands:** `{diag['lto_implementation']}`; profile compile commands: " + ", ".join(
-                f"{p} `{v['compile_commands']}` with `-march={v['march']}`, PIC and LTO `{v['lto']}`"
-                for p, v in diag["profile_compile_validation"].items()) + ".")
-            lines.append(f"  Final link: `{diag['final_link_command']}`")
+            profiles = diag.get("profile_compile_validation", {})
+            lines.append(f"- **{config['id']} build:** direct profile objects; " +
+                         ", ".join(f"{p}: `-march={v['march']}`, {v['compile_commands']} TUs"
+                                   for p, v in profiles.items()) +
+                         "; no LTO in compile or link flags.")
+            lines.append(f"  Final link: `{diag.get('final_link_command', 'unavailable')}`")
         if diag.get("warning_lines"):
-            lines.append(f"- **{config['id']} compiler warnings:** {diag.get('warning_count')} total; examples: `" + "` · `".join(
-                item.replace("`", "'") for item in diag["warning_lines"][:3]) + "`.")
-    if not any(build_diagnostics.values()):
-        lines.append("Build commands and ISA checks are unavailable because no build diagnostics were written.")
-    lines.append("")
-    lines.extend(["### ISA validation summary", ""])
+            lines.append(f"- **{config['id']} warnings:** " +
+                         "; ".join(item.replace("`", "'")
+                                   for item in diag["warning_lines"][:3]))
+    lines.extend(["", "### Static ISA validation", "",
+                  "The inspection checks representative FFT profile objects, baseline dispatcher code, and the final extension for LTO sections. Passing does not establish comprehensive ISA purity across all native symbols or every supported CPU.", ""])
     isa_rows = []
     for config in CONFIGS:
         note = isa_notes.get(config["id"], {})
-        profile_notes = note.get("profile_disassembly", {})
-        counts = ", ".join(
-            f"{profile}: {item.get('disassembly', {}).get('instruction_count', 0)} instructions"
-            for profile, item in profile_notes.items())
-        probes = note.get("guarded_cpu_feature_probes", [])
-        probe_text = ", ".join(
-            f"{item.get('instruction')} guarded ({item.get('count')})" for item in probes) or "none"
-        isa_rows.append([config["id"], note.get("status", "unavailable"), counts or "—",
-                         "baseline dispatcher checked" if note.get("dispatcher_disassembly") else "—",
-                         probe_text,
-                         "no LTO IR in final extension" if note.get("extension_gnu_lto_sections") is False else "—"])
-    lines.extend(markdown_table(["ID", "Status", "Profile disassembly", "Dispatcher",
-                                 "CPU feature probes", "Final link"], isa_rows))
+        profiles = note.get("profile_disassembly", {})
+        isa_rows.append([
+            config["id"], note.get("status", "unavailable"),
+            ", ".join(f"{p}: {v.get('disassembly', {}).get('instruction_count', 0)} instructions"
+                      for p, v in profiles.items()) or "—",
+            "checked" if note.get("dispatcher_disassembly") else "unavailable",
+            "no LTO IR" if note.get("extension_gnu_lto_sections") is False else "unavailable",
+        ])
+    lines.extend(markdown_table(
+        ["ID", "Static check", "Representative FFT objects",
+         "Dispatcher", "Extension"], isa_rows))
     lines.append("")
 
-    reverse = build_diagnostics.get("E", {}).get("reverse_link", {})
-    reverse_state = status.get("variants", {}).get("E", {})
-    lines.extend(["### Supplemental E reverse-order final link", ""])
-    if reverse.get("reversed_profile_object_order"):
-        correctness = reverse.get("correctness", {})
-        reverse_rows = [
-            ["Reverse check status", reverse.get("status", "unavailable")],
-            ["Normal profile object order", ", ".join(reverse.get("normal_profile_object_order", []))],
-            ["Reversed profile object order", ", ".join(reverse.get("reversed_profile_object_order", []))],
-            ["Profile-local LTO partial links", f"{reverse.get('partial_link_command_count', 0)} existing links reused unchanged (SHA-256 `{reverse.get('partial_link_commands_sha256', 'unavailable')}`)" if reverse.get("profile_local_partial_links_reused_unchanged") else "validation failed"],
-            ["Other link inputs", "same baseline dispatcher and remaining object/library inputs" if reverse.get("other_link_inputs_unchanged") else "validation failed"],
-            ["Final link flags", "-fno-lto; no -flto flags" if reverse.get("final_link_fno_lto") and not reverse.get("final_link_lto_flags") else "validation failed"],
-            ["Reversed extension", f"{reverse.get('extension_size_bytes', '—')} bytes at `{reverse.get('extension', 'unavailable')}`; no .gnu.lto sections" if reverse.get("gnu_lto_sections") is False else "validation failed"],
-            ["Python initializer", reverse.get("python_init_symbol", "unavailable")],
-            ["Profile namespaces", ", ".join(f"{profile}: {count}" for profile, count in reverse.get("profile_symbol_counts", {}).items())],
-            ["v4 runtime", reverse.get("v4_execution", "unavailable")],
-        ]
-        lines.extend(markdown_table(["Check", "Result"], reverse_rows, align_right=set()))
-        lines.append("")
-        lines.append(f"The reversed extension was linked from the existing E native objects with the recorded baseline dispatcher and remaining link inputs: `{reverse.get('final_link_command', 'unavailable')}`. Correctness checks ran against the {len(CASES)} case set at v1 and v3 and stopped at the first process failure; v4 was only compiled and inspected.")
-        lines.append("")
-        correctness_rows = [[
-            {"1": "x86-64", "3": "x86-64-v3"}.get(profile, profile),
-            row.get("import", "unavailable"),
-            str(row.get("case_count", 0)), row.get("correctness", "unavailable"),
-            row.get("failed_or_interrupted_case", "—"),
-            ("SIGILL (-4)" if row.get("process_returncode") == -4 else
-             str(row.get("process_returncode", "—"))),
-        ] for profile, row in correctness.items()]
-        lines.extend(markdown_table(["Executed profile", "Import", "Cases completed", "Correctness", "Failed/interrupted case", "Process status"],
-                                    correctness_rows, align_right={2, 5}))
-        lines.append("")
-        disassembly_rows = [[
-            label, details.get("symbol", "unavailable"),
-            str(details.get("instruction_count", "—")),
-            "match" if details.get("normalized_instruction_stream_match") else "mismatch",
-            str(details.get("normalized_instruction_change_count", 0)),
-            "match" if details.get("raw_instruction_encoding_match") else "relocations differ",
-            str(details.get("rip_relative_reference_changes", 0)),
-            str(details.get("rip_relative_symbol_changes", 0)),
-            f"{details.get('reversed_vex_instruction_count', 0)} VEX / {details.get('reversed_evex_instruction_count', 0)} EVEX",
-        ] for label, details in reverse.get("disassembly_comparison", {}).items()]
-        lines.extend(markdown_table(["Disassembled code", "Symbol", "Instructions", "Instruction stream", "Changed instructions", "Encoding", "RIP targets changed", "Target symbols changed", "Reversed encodings"],
-                                    disassembly_rows, align_right={2, 4, 6, 7}))
-        lines.append("")
-        lines.append("Per-symbol disassembly covers one FFT execution routine from each profile, CPU capability detection, `PyInit_ducc0`, and the shared `std::vector<unsigned long>` copy constructor. The instruction-stream comparison normalizes relocated branch and RIP-relative addresses; the table separately counts changed instructions, resolved targets, base symbol changes, raw encodings, and VEX/EVEX instructions. Full target examples, commands, hashes, and disassembly are in the E build log, `reverse-link-validation.json`, and `build-diagnostics.json`.")
-        if reverse.get("detected_link_order_instruction_changes"):
-            lines.append("Detected instruction-stream changes: " + ", ".join(
-                f"`{label}` ({reverse['disassembly_comparison'][label].get('normalized_instruction_change_count')} changed instruction positions; reversed EVEX count {reverse['disassembly_comparison'][label].get('reversed_evex_instruction_count')})"
-                for label in reverse["detected_link_order_instruction_changes"]) + ".")
-            lines.append("")
-            change_rows = []
-            for label in reverse["detected_link_order_instruction_changes"]:
-                for item in reverse["disassembly_comparison"][label].get(
-                        "normalized_instruction_change_examples", [])[:6]:
-                    change_rows.append([
-                        label, str(item.get("instruction_index")),
-                        item.get("normal", "—"), item.get("reversed", "—"),
-                    ])
-            lines.extend(markdown_table(
-                ["Changed symbol", "Instruction index", "Normal order", "Reversed order"],
-                change_rows, align_right={1}))
-            lines.append("")
-        if reverse.get("error"):
-            lines.append(f"Reverse-link finding: {reverse['error']}")
-            lines.append("")
-    else:
-        lines.append(f"Reverse-order final-link validation: **{reverse_state.get('reverse_link_validation', 'unavailable')}**. {reverse.get('error') or reverse_state.get('reverse_link_error', 'No reverse-link result was recorded.')}")
-    lines.append("")
-
-    lines.extend(["## L. Failures and limitations", ""])
+    lines.extend(["## K. Failures and limitations", ""])
     profile_rows = []
     for profile in PROFILES:
         if profile in supported:
@@ -748,10 +587,6 @@ def make_report(output_dir: Path) -> tuple[str, int]:
         if state.get("runtime_import") != "pass":
             failures.append(["runtime import", config["id"], "all supported profiles",
                              "all cases", state.get("runtime_import_error", "not run")])
-        if config["id"] == "E" and state.get("reverse_link_validation") != "pass":
-            failures.append(["reverse-order link", "E", "v1 and v3 correctness",
-                             "24-case set, v1/v3 only",
-                             state.get("reverse_link_error", "not run")])
 
     for row in timings:
         if row.get("record_type") == "ducc" and row.get("correctness") != "pass":
@@ -809,9 +644,14 @@ def make_report(output_dir: Path) -> tuple[str, int]:
     else:
         lines.append("All DUCC absolute timings and all reference comparisons for supported profiles are present.")
     lines.extend(["", f"**Primary PNG charts:** {len(charts)} (maximum 9).", ""])
+    lines.append("Charts are stored in the downloadable `fft-inline-tweaks-results` Actions artifact; relative artifact paths cannot render as images inside an Actions step summary.")
+    repository = os.environ.get("GITHUB_REPOSITORY")
+    run_id = os.environ.get("GITHUB_RUN_ID")
+    if repository and run_id:
+        lines.append(f"[View this run and its downloadable artifact](https://github.com/{repository}/actions/runs/{run_id})")
     for chart in charts:
-        lines.append(f"![{Path(chart).stem}]({chart})")
-        lines.append("")
+        lines.append(f"- `{chart}`")
+    lines.append("")
 
     report = "\n".join(lines).rstrip() + "\n"
     (output_dir / "report.md").write_text(report, encoding="utf-8")
@@ -833,7 +673,7 @@ def main() -> int:
         args.summary.parent.mkdir(parents=True, exist_ok=True)
         if len(report_bytes) > MAX_SUMMARY_BYTES:
             args.summary.write_text(
-                f"# FFT factorial benchmark\n\nThe complete report is "
+                f"# FFT inline-fix × FFT-tweaks benchmark\n\nThe complete report is "
                 f"{len(report_bytes)} bytes, above the {MAX_SUMMARY_BYTES}-byte "
                 "Actions step-summary limit. It is preserved as `report.md` in the "
                 "artifact; the workflow is marked failed so no report data is silently "

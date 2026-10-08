@@ -15,7 +15,7 @@ from time import perf_counter
 
 
 # NumPy runs first in each shared reference block and supplies the saved
-# numerical witness used to validate SciPy, FFTW, and all eight DUCC builds.
+# numerical witness used to validate SciPy, FFTW, and all four DUCC builds.
 REFERENCES = ("numpy", "scipy", "fftw")
 PROFILE_NAMES = {1: "x86-64", 3: "x86-64-v3", 4: "x86-64-v4"}
 MAX_EXTENTS = {1: 8192, 2: 2048, 3: 256}

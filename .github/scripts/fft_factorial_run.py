@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build, audit, and measure the eight pinned multiarch FFT configurations."""
+"""Build, inspect, and measure four pinned inline-fix/FFT-tweaks configurations."""
 
 from __future__ import annotations
 
@@ -26,7 +26,6 @@ from prepare_factorial_sources import (
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT = SCRIPT_DIR.parents[1]
 BENCHMARK_SCRIPT = SCRIPT_DIR / "fft_factorial_benchmark.py"
-LTO_HELPER = ROOT / ".github/patches/profile_local_lto.cmake"
 PROFILE_LEVELS = {"x86-64": 1, "x86-64-v3": 3, "x86-64-v4": 4}
 MARCH = {"x86-64": "x86-64", "x86-64-v3": "x86-64-v3",
          "x86-64-v4": "x86-64-v4"}
@@ -102,17 +101,16 @@ def dependency_versions() -> dict:
     return versions
 
 
-def clean_build_env(compiler: str, profile_lto: bool, helper_path: Path) -> dict:
+def clean_build_env(compiler: str) -> dict:
     env = os.environ.copy()
     for key in ("CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "DUCC0_CFLAGS",
                 "DUCC0_LFLAGS", "DUCC0_FLAGS", "DUCC0_ENABLE_LTO",
-                "DUCC0_MAX_PSABI_LEVEL"):
+                "DUCC0_MAX_PSABI_LEVEL", "DUCC0_BENCH_CMAKE_HELPER",
+                "DUCC0_PROFILE_LOCAL_LTO"):
         env.pop(key, None)
     env["CXX"] = compiler
     env["DUCC0_OPTIMIZATION"] = "multiarch"
     env["DUCC0_USE_NANOBIND"] = "1"
-    env["DUCC0_BENCH_CMAKE_HELPER"] = str(helper_path)
-    env["DUCC0_PROFILE_LOCAL_LTO"] = "ON" if profile_lto else "OFF"
     return env
 
 
@@ -146,7 +144,7 @@ def configure_and_build(config: dict, source: Path, artifact: Path,
     cmake = shutil.which("cmake")
     if not cmake:
         raise RuntimeError("cmake is not installed")
-    env = clean_build_env(compiler, config["profile_lto"], LTO_HELPER)
+    env = clean_build_env(compiler)
     configure_cmd = [
         cmake, "-S", str(source), "-B", str(build_dir), "-G", "Ninja",
         "-DCMAKE_BUILD_TYPE=Release",
@@ -155,8 +153,7 @@ def configure_and_build(config: dict, source: Path, artifact: Path,
         f"-DSKBUILD_PROJECT_NAME=ducc0",
         f"-DSKBUILD_PROJECT_VERSION={version}",
         f"-DCMAKE_INSTALL_PREFIX={install_dir}",
-        f"-DDUCC0_BENCH_CMAKE_HELPER={LTO_HELPER}",
-        f"-DDUCC0_PROFILE_LOCAL_LTO={'ON' if config['profile_lto'] else 'OFF'}",
+        "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF",
         "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
     ]
     diagnostics = {"source_directory": str(source),
@@ -239,112 +236,62 @@ def find_final_link_command(log_text: str) -> str:
 
 
 def validate_commands(config: dict, diagnostics: dict) -> dict:
+    """Verify direct upstream multiarch objects, without compiler/linker LTO."""
     build_dir = Path(diagnostics["build_directory"])
     commands = find_compile_commands(build_dir)
     profiles = {}
     for name in ("v1", "v3", "v4"):
-        profile_name = {"v1": "ducc0_v1", "v3": "ducc0_v3", "v4": "ducc0_v4"}[name]
+        profile_name = f"ducc0_{name}"
         entries = [entry for entry in commands
                    if any(profile_name in token for token in command_tokens(entry))]
         if not entries:
             raise RuntimeError(f"no compile commands found for {profile_name}")
-        expected_march = {"v1": "x86-64", "v3": "x86-64-v3", "v4": "x86-64-v4"}[name]
+        march = {"v1": "x86-64", "v3": "x86-64-v3", "v4": "x86-64-v4"}[name]
         for entry in entries:
             tokens = command_tokens(entry)
-            if f"-march={expected_march}" not in tokens:
-                raise RuntimeError(
-                    f"{profile_name} compile command lacks -march={expected_march}: {entry}")
-            if "-fPIC" not in tokens:
-                raise RuntimeError(f"{profile_name} compile command is not PIC: {entry}")
-            if _has_lto(tokens) != config["profile_lto"]:
-                raise RuntimeError(
-                    f"{profile_name} compile LTO state differs from requested factor")
-        profiles[name] = {"compile_commands": len(entries), "march": expected_march,
-                          "pic": True, "lto": config["profile_lto"]}
-    if len({value["compile_commands"] for value in profiles.values()}) != 1:
-        raise RuntimeError(f"profile translation-unit counts differ: {profiles}")
+            if f"-march={march}" not in tokens or "-fPIC" not in tokens:
+                raise RuntimeError(f"{profile_name} lacks expected ISA/PIC flags: {entry}")
+            if _has_lto(tokens):
+                raise RuntimeError(f"{profile_name} unexpectedly compiles with LTO: {entry}")
+        profiles[name] = {"compile_commands": len(entries), "march": march,
+                          "pic": True, "lto": False}
+    if len({x["compile_commands"] for x in profiles.values()}) != 1:
+        raise RuntimeError(f"unequal profile translation-unit counts: {profiles}")
 
-    dispatcher_entries = [entry for entry in commands
-                          if entry.get("file", "").endswith(("python/ducc_driver.cc",
-                                                              "python/multiarch.cc"))]
-    if len(dispatcher_entries) != 2:
-        raise RuntimeError(f"expected baseline dispatcher sources, found {dispatcher_entries}")
-    for entry in dispatcher_entries:
+    dispatcher = [entry for entry in commands
+                  if entry.get("file", "").endswith(
+                      ("python/ducc_driver.cc", "python/multiarch.cc"))]
+    if len(dispatcher) != 2:
+        raise RuntimeError("expected two dispatcher compile commands")
+    for entry in dispatcher:
         tokens = command_tokens(entry)
-        if "-march=x86-64" not in tokens:
-            raise RuntimeError(f"dispatcher is not compiled for baseline x86-64: {entry}")
-        if any(token in tokens for token in ("-march=native", "-march=x86-64-v3",
-                                              "-march=x86-64-v4")):
-            raise RuntimeError(f"dispatcher compile command enables a higher ISA: {entry}")
-        if _has_lto(tokens):
-            raise RuntimeError(f"dispatcher compile command unexpectedly uses LTO: {entry}")
-        if "-fno-lto" not in tokens:
-            raise RuntimeError(f"dispatcher lacks an explicit -fno-lto: {entry}")
+        if "-march=x86-64" not in tokens or _has_lto(tokens):
+            raise RuntimeError(f"dispatcher is not baseline ISA/no-LTO: {entry}")
+        if any(flag in tokens for flag in ("-march=native", "-march=x86-64-v3",
+                                          "-march=x86-64-v4")):
+            raise RuntimeError(f"dispatcher has a higher ISA target: {entry}")
 
     log_text = Path(diagnostics["log"]).read_text(encoding="utf-8", errors="replace")
     final_link = find_final_link_command(log_text)
-    final_tokens = shlex.split(final_link)
-    if _has_lto(final_tokens) or "-fno-lto" not in final_tokens:
-        raise RuntimeError(f"final extension link is not explicitly non-LTO: {final_link}")
-
-    partial_commands = [line.strip() for line in log_text.splitlines()
-                        if "-flinker-output=nolto-rel" in line]
-    if config["profile_lto"]:
-        if len(partial_commands) != 3:
-            raise RuntimeError(f"expected 3 profile-local partial-link commands, found {len(partial_commands)}")
-        for name in ("v1", "v3", "v4"):
-            expected_march = {"v1": "x86-64", "v3": "x86-64-v3", "v4": "x86-64-v4"}[name]
-            candidates = [line for line in partial_commands
-                          if f"ducc0_{name}.native.o" in line]
-            if len(candidates) != 1:
-                raise RuntimeError(f"no unique {name} native partial-link command")
-            tokens = shlex.split(candidates[0])
-            if "-flto" not in tokens or "-r" not in tokens or "-fPIC" not in tokens:
-                raise RuntimeError(f"incomplete profile-local partial-link flags: {candidates[0]}")
-            if ("-flinker-output=nolto-rel" not in tokens or
-                    "-flto-partition=none" not in tokens):
-                raise RuntimeError(f"partial link does not emit partitioned native code: {candidates[0]}")
-            if f"-march={expected_march}" not in tokens:
-                raise RuntimeError(f"wrong target architecture in partial link: {candidates[0]}")
-            if not any(f"ducc0_lib_{name}.dir" in token for token in tokens):
-                raise RuntimeError(f"partial link includes no objects from profile {name}")
-            own_objects = [token for token in tokens
-                           if f"ducc0_lib_{name}.dir" in token and token.endswith(".o")]
-            if len(own_objects) != profiles[name]["compile_commands"]:
-                raise RuntimeError(
-                    f"{name} partial link has {len(own_objects)} profile objects, "
-                    f"expected {profiles[name]['compile_commands']}")
-            if any(f"ducc0_lib_{other}.dir" in token for token in tokens
-                   for other in ("v1", "v3", "v4") if other != name):
-                raise RuntimeError(f"cross-profile object contamination in {name} partial link")
-        for name in ("v1", "v3", "v4"):
-            if f"ducc0_{name}.native.o" not in final_link:
-                raise RuntimeError(f"final non-LTO link omits {name} native profile object")
-        if any(f"ducc0_lib_{name}.dir" in final_link for name in ("v1", "v3", "v4")):
-            raise RuntimeError("final non-LTO link directly consumes profile LTO objects")
-    else:
-        if partial_commands:
-            raise RuntimeError("LTO-OFF build unexpectedly performed an LTO partial link")
-        for name in ("v1", "v3", "v4"):
-            if f"ducc0_lib_{name}.dir" not in final_link:
-                raise RuntimeError(f"final no-LTO link omits direct {name} profile objects")
+    if _has_lto(shlex.split(final_link)):
+        raise RuntimeError(f"final extension link uses LTO: {final_link}")
+    if "-flinker-output=nolto-rel" in log_text:
+        raise RuntimeError("unexpected profile-local LTO partial link")
+    for name in ("v1", "v3", "v4"):
+        if f"ducc0_lib_{name}.dir" not in final_link:
+            raise RuntimeError(f"direct {name} profile objects absent from final link")
 
     diagnostics["profile_compile_validation"] = profiles
     diagnostics["dispatcher_compile_validation"] = {
-        "sources": [entry["file"] for entry in dispatcher_entries],
+        "sources": [entry["file"] for entry in dispatcher],
         "march": "x86-64", "lto": False,
     }
-    diagnostics["partial_link_commands"] = partial_commands
     diagnostics["final_link_command"] = final_link
     diagnostics["final_link_lto"] = False
-    diagnostics["lto_implementation"] = (
-        "three independent GCC -r -flto -flto-partition=none "
-        "-flinker-output=nolto-rel links, "
-        "one object-library profile each" if config["profile_lto"] else
-        "direct native profile-object link; LTO disabled")
+    diagnostics["lto_implementation"] = "disabled; direct upstream multiarch profile-object link"
     return {"commands_valid": True, "profile_commands": profiles,
             "dispatcher_commands": diagnostics["dispatcher_compile_validation"],
-            "partial_links": partial_commands, "final_link": final_link}
+            "final_link": final_link}
 
 
 def _decode_disassembly(object_path: Path) -> dict:
@@ -394,57 +341,21 @@ def _decode_disassembly(object_path: Path) -> dict:
             "guarded_cpu_probe_count": len(cpu_probes)}
 
 
-def _symbols(object_path: Path) -> str:
-    result = capture(["nm", "-C", str(object_path)])
-    if result.returncode:
-        raise RuntimeError(f"nm failed for {object_path}: {result.stdout[-3000:]}")
-    return result.stdout
-
-
-def validate_native_object(path: Path, profile: str) -> dict:
-    file_result = capture(["file", str(path)])
-    header = capture(["readelf", "-h", str(path)])
-    sections = capture(["readelf", "-S", str(path)])
-    symbols = _symbols(path)
-    if file_result.returncode or header.returncode or sections.returncode:
-        raise RuntimeError(f"cannot inspect native profile output {path}")
-    if "relocatable" not in file_result.stdout.lower() or not re.search(
-            r"Type:\s+REL\b", header.stdout):
-        raise RuntimeError(f"profile output is not a relocatable ELF object: {path}")
-    if ".gnu.lto" in sections.stdout:
-        raise RuntimeError(f"LTO IR remains in native profile output: {path}")
-    if f"ducc0_{profile}::" not in symbols:
-        raise RuntimeError(f"native output has no expected {profile} DUCC symbols: {path}")
-    return {"path": str(path), "file": file_result.stdout.strip(),
-            "elf_type": "REL", "gnu_lto_sections": False,
-            "profile_symbols": sum(1 for line in symbols.splitlines()
-                                    if f"ducc0_{profile}::" in line),
-            "size_bytes": path.stat().st_size}
-
-
 def validate_isa(config: dict, diagnostics: dict) -> dict:
     build_dir = Path(diagnostics["build_directory"])
     variant = config["id"]
-    if config["profile_lto"]:
-        profile_objects = {
-            profile: build_dir / f"ducc0_{profile}.native.o"
-            for profile in ("v1", "v3", "v4")
-        }
-    else:
-        profile_objects = {}
-        for profile in ("v1", "v3", "v4"):
-            candidates = list((build_dir / "CMakeFiles" /
-                               f"ducc0_lib_{profile}.dir").rglob("fft_inst1.cc.o"))
-            if len(candidates) != 1:
-                raise RuntimeError(f"cannot find representative {profile} FFT object")
-            profile_objects[profile] = candidates[0]
+    profile_objects = {}
+    for profile in ("v1", "v3", "v4"):
+        candidates = list((build_dir / "CMakeFiles" /
+                           f"ducc0_lib_{profile}.dir").rglob("fft_inst1.cc.o"))
+        if len(candidates) != 1:
+            raise RuntimeError(f"cannot find representative {profile} FFT object")
+        profile_objects[profile] = candidates[0]
 
     native_notes = {}
     for profile, object_path in profile_objects.items():
         if not object_path.exists():
             raise RuntimeError(f"missing {profile} profile object: {object_path}")
-        if config["profile_lto"]:
-            native_notes[profile] = validate_native_object(object_path, profile)
         disassembly = _decode_disassembly(object_path)
         if profile == "v1" and disassembly["v1_incompatible_count"]:
             raise RuntimeError(f"v1 disassembly has higher-ISA instructions: {disassembly}")
@@ -510,8 +421,8 @@ def validate_isa(config: dict, diagnostics: dict) -> dict:
         }],
         "extension_gnu_lto_sections": False,
         "python_init_symbol": True,
-        "lto_state": "profile-local, native partial objects" if config["profile_lto"]
-                     else "disabled",
+        "lto_state": "disabled",
+        "audit_scope": "static representative FFT objects, dispatcher, and final extension; not a comprehensive runtime ISA proof",
     }
     diagnostics["isa_validation"] = note
     return note
@@ -538,459 +449,6 @@ def import_variant(config: dict, diagnostics: dict, artifact: Path,
     if info.get("active_profile") != info["available_profiles"][-1]:
         raise RuntimeError(f"{config['id']} does not select the best available profile: {info}")
     return info
-
-
-def _defined_demangled_symbols(extension: Path) -> list[tuple[str, str]]:
-    result = capture(["nm", "-C", "--defined-only", str(extension)])
-    if result.returncode:
-        raise RuntimeError(f"nm failed for {extension}: {result.stdout[-3000:]}")
-    symbols = []
-    for line in result.stdout.splitlines():
-        match = re.match(r"^\s*[0-9a-fA-F]+\s+([A-Za-z])\s+(.+)$", line)
-        if match:
-            symbols.append((match.group(1), match.group(2)))
-    return symbols
-
-
-def _disassemble_symbol(extension: Path, symbol: str) -> tuple[str, list[tuple[str, str]]]:
-    result = capture(["objdump", "-d", "-C", "-M", "intel",
-                      f"--disassemble={symbol}", str(extension)])
-    if result.returncode:
-        raise RuntimeError(f"objdump failed for {symbol}: {result.stdout[-3000:]}")
-    instructions = []
-    for line in result.stdout.splitlines():
-        address_match = re.match(r"^\s*([0-9a-fA-F]+):\s*(.*)$", line)
-        if not address_match:
-            continue
-        fields = address_match.group(2).split()
-        byte_count = 0
-        while byte_count < len(fields) and re.fullmatch(r"[0-9a-fA-F]{2}", fields[byte_count]):
-            byte_count += 1
-        if byte_count == 0 or byte_count >= len(fields):
-            continue
-        address = int(address_match.group(1), 16)
-        instructions.append((f"{address:x}",
-                             " ".join(fields[byte_count:]).strip()))
-    if not instructions:
-        raise RuntimeError(f"objdump found no instructions for {symbol} in {extension}")
-    return result.stdout, instructions
-
-
-def _canonical_instructions(instructions: list[tuple[str, str]]) -> list[str]:
-    start = int(instructions[0][0], 16)
-    canonical = []
-    for address_text, body in instructions:
-        fields = body.split(None, 1)
-        mnemonic = fields[0].lower()
-        operands = fields[1].lower() if len(fields) == 2 else ""
-        if (mnemonic == "call" or mnemonic.startswith("j") or
-                mnemonic.startswith("loop") or mnemonic == "xbegin"):
-            target = re.match(r"^(?:0x)?([0-9a-f]+)(?:\s+<([^>]+)>)?", operands)
-            if target:
-                annotation = target.group(2)
-                if annotation:
-                    operands = f"target<{annotation}>" + operands[target.end():]
-                else:
-                    relative = int(target.group(1), 16) - start
-                    operands = f"target+{relative:x}" + operands[target.end():]
-        operands = re.sub(r"\[rip[+-]0x[0-9a-f]+\]", "[rip+reloc]", operands)
-        if "[rip+reloc]" in operands:
-            operands = re.sub(r"\s*#.*$", "", operands)
-        else:
-            operands = re.sub(r"#\s*(?:0x)?[0-9a-f]+\s*(<[^>]+>)?",
-                              lambda match: "#" + (match.group(1) or "reloc"), operands)
-        canonical.append(f"{mnemonic} {operands}".rstrip())
-    return canonical
-
-
-def _rip_reference_targets(instructions: list[tuple[str, str]]) -> list[str]:
-    targets = []
-    for _, body in instructions:
-        if "[rip" not in body.lower():
-            continue
-        comment = body.partition("#")[2].strip()
-        targets.append(comment or "unresolved target")
-    return targets
-
-
-def _reference_identity(target: str) -> tuple[str, str]:
-    match = re.search(r"<(.+)>$", target)
-    symbol = match.group(1) if match else target
-    symbol = re.sub(r"\+0x[0-9a-fA-F]+$", "+reloc", symbol)
-    base_symbol = re.sub(r"\+reloc$", "", symbol)
-    return symbol, base_symbol
-
-
-def _run_reverse_correctness(extension_dir: Path, profile: str,
-                             python_executable: str, build_log: Path) -> dict:
-    script_dir = str(SCRIPT_DIR)
-    script = r'''import json
-import ducc0
-import numpy as np
-from fft_factorial_benchmark import (CASES, _reference_transform, _result_dtype,
-    call_ducc, make_input, output_shape, relative_l2_error, tolerance_for)
-
-profile = __import__("os").environ["DUCC0_MAX_PSABI_LEVEL"]
-expected = {"1": "x86-64", "3": "x86-64-v3"}[profile]
-info = ducc0.misc.cpu_info()
-assert info["active_profile"] == expected, info
-assert info["configured_limit"] == expected, info
-assert info["compiled_profiles"] == ["x86-64", "x86-64-v3", "x86-64-v4"], info
-print(json.dumps({"record_type": "import", "profile": expected,
-                  "cpu_info": info}), flush=True)
-rows = []
-for case in CASES:
-    print(json.dumps({"record_type": "case_start", "case": case["id"]}), flush=True)
-    shape, data = make_input(case, 0)
-    reference = _reference_transform("numpy", case["operation"], data, shape, 1)
-    out = np.empty(output_shape(case["operation"], shape), dtype=_result_dtype(case))
-    result = call_ducc(ducc0, case["operation"], data, shape, out)
-    error = relative_l2_error(result, reference)
-    passed = (tuple(result.shape) == output_shape(case["operation"], shape)
-              and np.isfinite(error) and error <= tolerance_for(case))
-    rows.append({"case": case["id"], "shape": list(shape), "l2_error": error,
-                 "tolerance": tolerance_for(case), "correctness": "pass" if passed else "fail"})
-    print(json.dumps({"record_type": "case_result", **rows[-1]}, sort_keys=True), flush=True)
-    if not passed:
-        break
-print(json.dumps({"record_type": "summary", "profile": expected,
-                  "cpu_info": info, "case_count": len(rows),
-                  "correctness": "pass" if len(rows) == len(CASES) and
-                      all(row["correctness"] == "pass" for row in rows) else "fail",
-                  "cases": rows}, sort_keys=True), flush=True)
-'''
-    env = os.environ.copy()
-    env["PYTHONPATH"] = (str(extension_dir) + os.pathsep + script_dir +
-                         os.pathsep + env.get("PYTHONPATH", ""))
-    env["DUCC0_MAX_PSABI_LEVEL"] = profile
-    result = capture([python_executable, "-c", script], cwd=extension_dir,
-                     env=env, timeout=1800)
-    with build_log.open("a", encoding="utf-8") as log:
-        log.write(f"\n===== reversed extension correctness at {profile}; exit={result.returncode} =====\n")
-        log.write(result.stdout)
-        if not result.stdout.endswith("\n"):
-            log.write("\n")
-    records = []
-    for line in result.stdout.splitlines():
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    ready = next((row for row in records if row.get("record_type") == "import"), None)
-    summary = next((row for row in records if row.get("record_type") == "summary"), None)
-    completed = [row for row in records if row.get("record_type") == "case_result"]
-    started = [row for row in records if row.get("record_type") == "case_start"]
-    if ready is None:
-        return {"profile": {"1": "x86-64", "3": "x86-64-v3"}[profile],
-                "import": "fail", "correctness": "not-run",
-                "process_returncode": result.returncode,
-                "termination_signal": {-4: "SIGILL", -7: "SIGBUS", -11: "SIGSEGV"}.get(
-                    result.returncode),
-                "error": result.stdout[-4000:] or "reversed extension import failed"}
-    if summary and result.returncode == 0:
-        details = summary
-        details["import"] = "pass"
-        details["process_returncode"] = 0
-        details["termination_signal"] = None
-        return details
-    active_case = started[-1]["case"] if started else None
-    return {
-        "profile": {"1": "x86-64", "3": "x86-64-v3"}[profile],
-        "cpu_info": ready["cpu_info"],
-        "import": "pass",
-        "correctness": "fail",
-        "case_count": len(completed),
-        "completed_cases": completed,
-        "failed_or_interrupted_case": active_case,
-        "process_returncode": result.returncode,
-        "termination_signal": {-4: "SIGILL", -7: "SIGBUS", -11: "SIGSEGV"}.get(
-            result.returncode),
-        "error": result.stdout[-4000:] or f"worker exited with status {result.returncode}",
-    }
-
-
-def validate_reverse_final_link(config: dict, diagnostics: dict, common_info: dict,
-                                artifact: Path, python_executable: str) -> dict:
-    if config["id"] != "E" or not config["profile_lto"]:
-        raise RuntimeError("reverse final-link check is restricted to LTO configuration E")
-    if not diagnostics.get("command_validation", {}).get("commands_valid"):
-        raise RuntimeError("E profile-local partial links have not passed command validation")
-    if diagnostics.get("isa_validation", {}).get("status") != "pass":
-        raise RuntimeError("E native profile objects have not passed their ISA audit")
-    partial_commands = list(diagnostics.get("partial_link_commands", []))
-    if len(partial_commands) != 3:
-        raise RuntimeError(f"E must have exactly three audited profile-local partial links, got {len(partial_commands)}")
-    partial_links_sha256 = sha256_bytes("\n".join(partial_commands).encode())
-
-    build_dir = Path(diagnostics["build_directory"])
-    normal_extension = Path(diagnostics["extension"])
-    original = shlex.split(diagnostics["final_link_command"])
-    compiler_index = next((index for index, token in enumerate(original)
-                           if any(name in Path(token).name
-                                  for name in ("c++", "g++", "clang++"))), None)
-    if compiler_index is None:
-        raise RuntimeError("cannot locate the C++ linker in E's recorded final link")
-    tokens = original[compiler_index:]
-    if "&&" in tokens:
-        tokens = tokens[:tokens.index("&&")]
-    normal_tokens = list(tokens)
-    object_positions = {}
-    for profile in ("v1", "v3", "v4"):
-        matches = [index for index, token in enumerate(tokens)
-                   if Path(token).name == f"ducc0_{profile}.native.o"]
-        if len(matches) != 1:
-            raise RuntimeError(f"E final link does not contain one {profile} native object")
-        object_positions[profile] = matches[0]
-    normal_order = [profile for _, profile in sorted(
-        (position, profile) for profile, position in object_positions.items())]
-    if normal_order != ["v1", "v3", "v4"]:
-        raise RuntimeError(f"normal E final link order changed unexpectedly: {normal_order}")
-    profile_args = {profile: tokens[position]
-                    for profile, position in object_positions.items()}
-    for position, profile in zip(sorted(object_positions.values()), ("v4", "v3", "v1")):
-        tokens[position] = profile_args[profile]
-
-    reverse_dir = build_dir / "reverse-order"
-    reverse_dir.mkdir(parents=True, exist_ok=True)
-    reverse_extension = reverse_dir / normal_extension.name
-    if "-o" not in tokens:
-        raise RuntimeError("E final link command has no output argument")
-    output_index = tokens.index("-o")
-    tokens[output_index + 1] = str(reverse_extension)
-    dependency_flags = [index for index, token in enumerate(tokens)
-                        if token.startswith("-Wl,--dependency-file=")]
-    if len(dependency_flags) != 1:
-        raise RuntimeError("E final link has no unique Ninja dependency-file option")
-    tokens[dependency_flags[0]] = "-Wl,--dependency-file=CMakeFiles/ducc0.dir/link.reverse-order.d"
-    if "-fno-lto" not in tokens or _has_lto(tokens):
-        raise RuntimeError("reverse final link must use -fno-lto and contain no LTO flags")
-    reverse_order = [profile for _, profile in sorted(
-        (tokens.index(profile_args[profile]), profile) for profile in profile_args)]
-    if reverse_order != ["v4", "v3", "v1"]:
-        raise RuntimeError(f"reverse final-link profile order is wrong: {reverse_order}")
-    def other_link_inputs(command_tokens: list[str]) -> list[str]:
-        return [token for token in command_tokens
-                if token.endswith((".o", ".a")) and
-                not any(Path(token).name == f"ducc0_{profile}.native.o"
-                        for profile in ("v1", "v3", "v4"))]
-
-    normal_other_inputs = other_link_inputs(normal_tokens)
-    reversed_other_inputs = other_link_inputs(tokens)
-    if normal_other_inputs != reversed_other_inputs:
-        raise RuntimeError("reverse link changed baseline dispatcher or other link inputs")
-
-    link_started = time.perf_counter()
-    link_env = clean_build_env(tokens[0], True, LTO_HELPER)
-    link = capture(tokens, cwd=build_dir, env=link_env, timeout=900)
-    link_seconds = time.perf_counter() - link_started
-    command_text = shlex.join(tokens)
-    build_log = Path(diagnostics["log"])
-    with build_log.open("a", encoding="utf-8") as log:
-        log.write("\n===== supplemental E reverse-order final link =====\n")
-        log.write(f"profile object order: v4, v3, v1; elapsed={link_seconds:.3f}s\n")
-        log.write("COMMAND: " + command_text + "\n")
-        log.write(link.stdout)
-        if not link.stdout.endswith("\n"):
-            log.write("\n")
-    if link.returncode or not reverse_extension.exists():
-        raise RuntimeError(f"E reverse-order final link failed: {link.stdout[-5000:]}")
-    logged_partial_commands = [line.strip() for line in build_log.read_text(
-        encoding="utf-8", errors="replace").splitlines()
-        if "-flinker-output=nolto-rel" in line]
-    if logged_partial_commands != partial_commands:
-        raise RuntimeError("reverse final link changed E's three profile-local partial-link commands")
-
-    sections = capture(["readelf", "-S", str(reverse_extension)])
-    if sections.returncode or ".gnu.lto" in sections.stdout:
-        raise RuntimeError("E reversed extension contains .gnu.lto sections or readelf failed")
-    exported = capture(["nm", "-D", "--defined-only", str(reverse_extension)])
-    if exported.returncode or not re.search(r"\bPyInit_ducc0\b", exported.stdout):
-        raise RuntimeError("E reversed extension does not preserve PyInit_ducc0")
-    defined = _defined_demangled_symbols(reverse_extension)
-    profile_symbol_counts = {
-        profile: sum(1 for _, name in defined if f"ducc0_{profile}::" in name)
-        for profile in ("v1", "v3", "v4")
-    }
-    if any(count == 0 for count in profile_symbol_counts.values()):
-        raise RuntimeError(f"E reversed extension lost expected profile symbols: {profile_symbol_counts}")
-
-    normal_defined = _defined_demangled_symbols(normal_extension)
-    comparison_symbols = {}
-    chosen_profile_symbols = {}
-    for profile in ("v1", "v3", "v4"):
-        matches = sorted({name for kind, name in normal_defined
-                          if kind in "TtWw" and f"ducc0_{profile}::detail_fft::" in name
-                          and "::general_r2c<float>(" in name and "[clone .cold]" not in name})
-        if not matches:
-            raise RuntimeError(f"normal E extension has no general_r2c profile symbol for {profile}")
-        chosen_profile_symbols[profile] = matches[0]
-    selected = {**{f"{profile}_fft": chosen_profile_symbols[profile]
-                   for profile in ("v1", "v3", "v4")},
-                "dispatcher_detection": "ducc0_multiarch::detect_cpu_capabilities()",
-                "python_initializer": "PyInit_ducc0",
-                "shared_std_vector_copy": (
-                    "std::vector<unsigned long, std::allocator<unsigned long> >::vector("
-                    "std::vector<unsigned long, std::allocator<unsigned long> > const&)")}
-    for label, symbol in selected.items():
-        if not any(name == symbol for _, name in defined):
-            raise RuntimeError(f"reversed extension lost disassembly target {symbol}")
-        normal_text, normal_instructions = _disassemble_symbol(normal_extension, symbol)
-        reverse_text, reverse_instructions = _disassemble_symbol(reverse_extension, symbol)
-        normal_canonical = _canonical_instructions(normal_instructions)
-        reverse_canonical = _canonical_instructions(reverse_instructions)
-        instruction_changes = [
-            {"instruction_index": index,
-             "normal": normal_canonical[index] if index < len(normal_canonical) else None,
-             "reversed": reverse_canonical[index] if index < len(reverse_canonical) else None}
-            for index in range(max(len(normal_canonical), len(reverse_canonical)))
-            if (normal_canonical[index] if index < len(normal_canonical) else None) !=
-               (reverse_canonical[index] if index < len(reverse_canonical) else None)
-        ]
-        normal_bytes = "\n".join(body for _, body in normal_instructions)
-        reverse_bytes = "\n".join(body for _, body in reverse_instructions)
-        normal_refs = _rip_reference_targets(normal_instructions)
-        reverse_refs = _rip_reference_targets(reverse_instructions)
-        normal_ref_ids = [_reference_identity(item) for item in normal_refs]
-        reverse_ref_ids = [_reference_identity(item) for item in reverse_refs]
-        changed_references = [
-            {"instruction_index": index, "normal_target": normal_refs[index]
-             if index < len(normal_refs) else None,
-             "reversed_target": reverse_refs[index]
-             if index < len(reverse_refs) else None}
-            for index in range(max(len(normal_ref_ids), len(reverse_ref_ids)))
-            if (normal_ref_ids[index][0] if index < len(normal_ref_ids) else None) !=
-               (reverse_ref_ids[index][0] if index < len(reverse_ref_ids) else None)
-        ]
-        changed_symbols = [item for item in changed_references
-                           if _reference_identity(item["normal_target"] or "")[1] !=
-                              _reference_identity(item["reversed_target"] or "")[1]]
-        normal_encoding = _instruction_bytes(normal_text)
-        reverse_encoding = _instruction_bytes(reverse_text)
-        vex_count = lambda encoded: sum(
-            1 for instruction in encoded
-            if instruction.split() and int(instruction.split()[0], 16) in (0xC4, 0xC5))
-        evex_count = lambda encoded: sum(
-            1 for instruction in encoded
-            if instruction.split() and int(instruction.split()[0], 16) == 0x62)
-        comparison_symbols[label] = {
-            "symbol": symbol,
-            "instruction_count": len(normal_instructions),
-            "normalized_instruction_stream_match": not instruction_changes,
-            "normalized_instruction_change_count": len(instruction_changes),
-            "normalized_instruction_change_examples": instruction_changes[:12],
-            "raw_instruction_encoding_match": normal_encoding == reverse_encoding,
-            "normal_vex_instruction_count": vex_count(normal_encoding),
-            "reversed_vex_instruction_count": vex_count(reverse_encoding),
-            "normal_evex_instruction_count": evex_count(normal_encoding),
-            "reversed_evex_instruction_count": evex_count(reverse_encoding),
-            "rip_relative_reference_count": len(normal_refs),
-            "rip_relative_reference_changes": len(changed_references),
-            "rip_relative_symbol_changes": len(changed_symbols),
-            "rip_relative_reference_change_examples": changed_references[:12],
-            "normal_instruction_sha256": sha256_bytes(normal_bytes.encode()),
-            "reversed_instruction_sha256": sha256_bytes(reverse_bytes.encode()),
-            "normal_encoding_sha256": sha256_bytes("\n".join(normal_encoding).encode()),
-            "reversed_encoding_sha256": sha256_bytes("\n".join(reverse_encoding).encode()),
-        }
-        with build_log.open("a", encoding="utf-8") as log:
-            log.write(f"\n===== link-order disassembly comparison: {label} =====\n")
-            log.write(f"symbol: {symbol}\nnormalized-instruction-stream: {len(normal_canonical)}; "
-                      f"changes: {len(instruction_changes)}\n")
-            log.write(f"raw-encoding-match: {normal_encoding == reverse_encoding}; "
-                      f"RIP-relative reference changes: {len(changed_references)}\n")
-            for item in changed_references[:12]:
-                log.write("RIP reference difference: " + json.dumps(item, sort_keys=True) + "\n")
-            log.write("--- normal order ---\n" + normal_text)
-            log.write("--- reversed order ---\n" + reverse_text)
-
-    correctness = {}
-    for profile in ("1", "3"):
-        correctness[profile] = _run_reverse_correctness(
-            reverse_dir, profile, python_executable, build_log)
-    if set(correctness) != {"1", "3"}:
-        raise RuntimeError("reverse extension correctness must run only at v1 and v3")
-    imports_passed = all(item.get("import") == "pass"
-                         for item in correctness.values())
-    import_failures = [item.get("profile", profile)
-                       for profile, item in correctness.items()
-                       if item.get("import") != "pass"]
-    archived_extension = artifact / "reverse-order-extension" / "E" / normal_extension.name
-    archived_extension.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(reverse_extension, archived_extension)
-
-    result = {
-        "status": ("pass" if all(item.get("import") == "pass" and
-                                    item.get("correctness") == "pass"
-                                    for item in correctness.values()) and
-                   all(item["normalized_instruction_stream_match"]
-                       for item in comparison_symbols.values()) else "fail"),
-        "normal_profile_object_order": normal_order,
-        "reversed_profile_object_order": reverse_order,
-        "profile_local_partial_links_reused_unchanged": True,
-        "partial_link_command_count": len(partial_commands),
-        "partial_link_commands_sha256": partial_links_sha256,
-        "partial_links_reexecuted": False,
-        "other_link_inputs_unchanged": True,
-        "unchanged_other_link_inputs": normal_other_inputs,
-        "final_link_command": command_text,
-        "final_link_seconds": link_seconds,
-        "final_link_fno_lto": "-fno-lto" in tokens,
-        "final_link_lto_flags": [token for token in tokens if token.startswith("-flto")],
-        "extension": str(archived_extension),
-        "build_extension": str(reverse_extension),
-        "extension_size_bytes": reverse_extension.stat().st_size,
-        "gnu_lto_sections": False,
-        "python_init_symbol": "PyInit_ducc0",
-        "profile_symbol_counts": profile_symbol_counts,
-        "import": ("pass at v1 and v3 configured limits" if imports_passed else
-                   "fail at " + ", ".join(import_failures)),
-        "imports_by_profile": {
-            item.get("profile", {"1": "x86-64", "3": "x86-64-v3"}[profile]):
-                item.get("import", "unavailable")
-            for profile, item in correctness.items()
-        },
-        "correctness_profiles": ["x86-64", "x86-64-v3"],
-        "correctness": correctness,
-        "v4_execution": "not run; compiled, linked, and disassembled only",
-        "disassembly_comparison": comparison_symbols,
-        "detected_link_order_instruction_changes": [
-            label for label, item in comparison_symbols.items()
-            if not item["normalized_instruction_stream_match"]],
-    }
-    if result["status"] != "pass":
-        failures = []
-        for profile, item in correctness.items():
-            if item.get("import") != "pass":
-                failures.append(f"{item['profile']} reversed extension import failed")
-            elif item.get("correctness") != "pass":
-                signal = item.get("termination_signal")
-                cause = f" ({signal})" if signal else ""
-                failures.append(
-                    f"{item['profile']} correctness stopped at "
-                    f"{item.get('failed_or_interrupted_case', 'unknown case')}{cause}")
-        if result["detected_link_order_instruction_changes"]:
-            failures.append("link order changed instruction streams in " + ", ".join(
-                result["detected_link_order_instruction_changes"]))
-        result["error"] = "; ".join(failures)
-    diagnostics["reverse_link"] = result
-    return result
-
-
-def _instruction_bytes(disassembly: str) -> list[str]:
-    result = []
-    for line in disassembly.splitlines():
-        match = re.match(r"^\s*[0-9a-fA-F]+:\s*(.*)$", line)
-        if not match:
-            continue
-        fields = match.group(1).split()
-        values = []
-        for field in fields:
-            if not re.fullmatch(r"[0-9a-fA-F]{2}", field):
-                break
-            values.append(field.lower())
-        if values:
-            result.append(" ".join(values))
-    return result
 
 
 def prepare_sources(repo_root: Path, worktree_root: Path, manifest_path: Path,
@@ -1028,11 +486,10 @@ def prepare_sources(repo_root: Path, worktree_root: Path, manifest_path: Path,
         "pinned_base_commit_fetched_from_upstream": fetched_base,
         "base_sha_verified_at_branch_creation": True,
         "upstream_head_at_branch_creation": BASE_SHA,
-        "fork_multiarch_head_at_branch_creation": "8aabaa0e925812a440f414e1df5cb817c4b70aa5",
         "benchmark_source_head_sha": run_git(repo_root, "rev-parse", "HEAD").strip(),
         "benchmark_source_sha_from_github_event": os.environ.get("FFT_FACTORIAL_SOURCE_SHA"),
-        "source_preparation": "eight detached temporary worktrees from one pinned upstream commit",
-        "factors": ["profile-local LTO", "special_mul always-inline", "FFT tweaks"],
+        "source_preparation": "four detached temporary worktrees from one pinned upstream commit",
+        "factors": ["special_mul always-inline", "FFT tweaks"],
         "special_mul_factor": {
             "on": "retain the upstream DUCC0_ALWAYS_INLINE annotation",
             "off": "remove the annotation on detail_fft::special_mul only",
@@ -1051,7 +508,6 @@ def prepare_sources(repo_root: Path, worktree_root: Path, manifest_path: Path,
             "source_files": ["src/ducc0/fft/fft1d_impl.h", "src/ducc0/fft/fftnd_impl.h"],
             "namespace_handling_preserved": True,
         },
-        "build_helper_sha256": sha256_bytes(LTO_HELPER.read_bytes()),
         "configurations": configs,
     }
     write_json(manifest_path, manifest)
@@ -1255,8 +711,8 @@ def run_benchmarks(artifact: Path, buildable: dict, common_info: dict,
         "supported_profiles": profiles,
         "skipped_profiles": [name for name in PROFILE_LEVELS if name not in profiles],
         "measured_variants": measured_variant_ids,
-        "reference_reuse": "one FFTW/SciPy/NumPy timing set per profile, case, and sample shared across A-H",
-        "variant_order": "rotated by case and sample across the eight IDs",
+        "reference_reuse": "one FFTW/SciPy/NumPy timing set per profile, case, and sample shared across A-D",
+        "variant_order": "rotated by case and sample across the four IDs",
         "expected_shape_policy": "random cases use pinned-base complex good_size; fixed controls bypass it",
         "ntry": ntry,
         "nrepeat": nrepeat,
@@ -1334,13 +790,11 @@ def main() -> int:
     source_sha = os.environ.get("FFT_FACTORIAL_SOURCE_SHA") or git_head(ROOT)
     shutil.copy2(ROOT / ".github/patches/fft_tweaks.patch",
                  artifact / "fft_tweaks.patch")
-    shutil.copy2(LTO_HELPER, artifact / "profile_local_lto.cmake")
     write_json(artifact / "patch-provenance.json", {
         "base_sha": BASE_SHA,
         "fft_tweaks_tip": "b456d7183ac5e667cff1b769bf5b17e33ebd24cb",
         "fft_tweaks_patch_sha256": sha256_bytes(
             (ROOT / ".github/patches/fft_tweaks.patch").read_bytes()),
-        "profile_local_lto_helper_sha256": sha256_bytes(LTO_HELPER.read_bytes()),
         "special_mul_off_patch": "single DUCC0_ALWAYS_INLINE annotation removal",
     })
 
@@ -1351,7 +805,6 @@ def main() -> int:
         "build_isolation": "pending",
         "isa_validation": "pending",
         "runtime_import": "pending",
-        "reverse_link_validation": "pending" if config["id"] == "E" else "not-required",
     } for config in CONFIGS}
     run_status = {
         "schema_version": 1,
@@ -1366,7 +819,7 @@ def main() -> int:
         "nrepeat": args.nrepeat,
         "threads": 1,
         "expected_cases_per_profile": CASE_COUNT,
-        "expected_configuration_count": 8,
+        "expected_configuration_count": 4,
         "compiler": compiler_info,
         "dependencies": versions,
         "build_jobs": jobs,
@@ -1457,35 +910,6 @@ def main() -> int:
             for profile in PROFILE_LEVELS
         ]
 
-    reverse_started = time.perf_counter()
-    reverse_status = variants["E"]
-    if common_info is not None and "E" in buildable:
-        try:
-            reverse_note = validate_reverse_final_link(
-                next(item for item in CONFIGS if item["id"] == "E"),
-                buildable["E"], common_info, artifact, sys.executable)
-            reverse_status["reverse_link_validation"] = reverse_note["status"]
-            if reverse_note["status"] != "pass":
-                reverse_status["reverse_link_error"] = reverse_note.get(
-                    "error", "reversed extension correctness checks failed")
-            reverse_status["build_diagnostics"]["reverse_link"] = reverse_note
-        except Exception as exc:
-            reverse_error = f"{type(exc).__name__}: {exc}"
-            reverse_status["reverse_link_validation"] = "fail"
-            reverse_status["reverse_link_error"] = reverse_error
-            reverse_status.setdefault("build_diagnostics", {})["reverse_link"] = {
-                "status": "fail", "error": reverse_error,
-            }
-    else:
-        reverse_error = "E did not pass the normal build, ISA audit, and import checks"
-        reverse_status["reverse_link_validation"] = "fail"
-        reverse_status["reverse_link_error"] = reverse_error
-        reverse_status.setdefault("build_diagnostics", {})["reverse_link"] = {
-            "status": "fail", "error": reverse_error,
-        }
-    run_status["reverse_link_validation_seconds"] = time.perf_counter() - reverse_started
-    write_json(artifact / "run-status.json", run_status)
-
     benchmark_summary = None
     benchmark_started = time.perf_counter()
     if common_info is not None and buildable:
@@ -1557,14 +981,11 @@ def main() -> int:
                           status.get("isa_validation") != "pass"]
     import_failures = [variant for variant, status in variants.items()
                        if status.get("runtime_import") != "pass"]
-    reverse_link_failures = [variant for variant, status in variants.items()
-                             if status.get("reverse_link_validation") == "fail"]
     benchmark_failures = (benchmark_summary or {}).get("worker_failures", [])
     run_status["failures"] = {
         "builds": build_failures,
         "build_or_isa_validation": isolation_failures,
         "runtime_import": import_failures,
-        "reverse_link": reverse_link_failures,
         "correctness_cells": failed_cells,
         "missing_cells": incomplete_cells,
         "reference_correctness": len(reference_failures),
@@ -1573,7 +994,7 @@ def main() -> int:
     }
     run_status["total_run_seconds"] = time.perf_counter() - run_started_perf
     success = not any((build_failures, isolation_failures, import_failures,
-                       reverse_link_failures, failed_cells, incomplete_cells, reference_failures,
+                       failed_cells, incomplete_cells, reference_failures,
                        benchmark_failures, run_status.get("benchmark_error")))
     run_status["overall_status"] = "pass" if success else "fail"
     write_json(artifact / "run-status.json", run_status)
@@ -1588,12 +1009,6 @@ def main() -> int:
             "error": status.get("validation_error"),
         }) for variant, status in variants.items()
     })
-    write_json(artifact / "reverse-link-validation.json",
-               variants["E"].get("build_diagnostics", {}).get("reverse_link", {
-                   "status": variants["E"].get("reverse_link_validation", "unavailable"),
-                   "error": variants["E"].get("reverse_link_error"),
-               }))
-
     shutil.rmtree(build_root, ignore_errors=True)
     run_status["temporary_builds_removed"] = True
     write_json(artifact / "run-status.json", run_status)

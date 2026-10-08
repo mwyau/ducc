@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create and verify the eight source trees used by the FFT factorial run."""
+"""Create and verify four inline-fix/FFT-tweaks source trees."""
 
 from __future__ import annotations
 
@@ -21,22 +21,14 @@ TWEAK_COMMITS = [
 TWEAK_PATCH_SHA256 = "28137d5773285f100c936ca60d9babe73e36f7857caeeeafdabc55d385e86f86"
 
 CONFIGS = [
-    {"id": "A", "profile_lto": False, "special_mul_fix": False, "fft_tweaks": False,
-     "label": "No LTO · pre-inline-fix · no FFT tweaks"},
-    {"id": "B", "profile_lto": False, "special_mul_fix": True, "fft_tweaks": False,
-     "label": "No LTO · inline fix · no FFT tweaks"},
-    {"id": "C", "profile_lto": False, "special_mul_fix": False, "fft_tweaks": True,
-     "label": "No LTO · pre-inline-fix · FFT tweaks"},
-    {"id": "D", "profile_lto": False, "special_mul_fix": True, "fft_tweaks": True,
-     "label": "No LTO · inline fix · FFT tweaks"},
-    {"id": "E", "profile_lto": True, "special_mul_fix": False, "fft_tweaks": False,
-     "label": "Profile-local LTO · pre-inline-fix · no FFT tweaks"},
-    {"id": "F", "profile_lto": True, "special_mul_fix": True, "fft_tweaks": False,
-     "label": "Profile-local LTO · inline fix · no FFT tweaks"},
-    {"id": "G", "profile_lto": True, "special_mul_fix": False, "fft_tweaks": True,
-     "label": "Profile-local LTO · pre-inline-fix · FFT tweaks"},
-    {"id": "H", "profile_lto": True, "special_mul_fix": True, "fft_tweaks": True,
-     "label": "Profile-local LTO · inline fix · FFT tweaks"},
+    {"id": "A", "special_mul_fix": False, "fft_tweaks": False,
+     "label": "Pre-inline-fix · no FFT tweaks"},
+    {"id": "B", "special_mul_fix": True, "fft_tweaks": False,
+     "label": "Inline fix · no FFT tweaks"},
+    {"id": "C", "special_mul_fix": False, "fft_tweaks": True,
+     "label": "Pre-inline-fix · FFT tweaks"},
+    {"id": "D", "special_mul_fix": True, "fft_tweaks": True,
+     "label": "Inline fix · FFT tweaks"},
 ]
 
 SPECIAL_MUL_PATH = "src/ducc0/fft/fft.h"
@@ -113,25 +105,16 @@ def prepare_variant(source: Path, config: dict, repo_root: Path) -> dict:
                        check=True)
         subprocess.run(["git", "-C", str(source), "apply", str(tweak_patch)], check=True)
 
-    # Redirect only the build's multiarch link call through the temporary helper.
+    # Keep upstream multiarch linking unchanged. Disable IPO for the
+    # complete benchmark extension so all four configurations use no LTO.
     cmake_path = source / "CMakeLists.txt"
     cmake_text = cmake_path.read_text(encoding="utf-8")
     old_ipo = "set(CMAKE_INTERPROCEDURAL_OPTIMIZATION True)"
     if cmake_text.count(old_ipo) != 1:
         raise RuntimeError(f"{config['id']}: unexpected global IPO configuration")
-    cmake_text = cmake_text.replace(
-        old_ipo, "set(CMAKE_INTERPROCEDURAL_OPTIMIZATION False)", 1)
-    old_link = (
-        "    target_link_libraries(${PKGNAME} PRIVATE ${PKGNAME}_lib_v1 "
-        "${PKGNAME}_lib_v3 ${PKGNAME}_lib_v4)"
-    )
-    new_link = (
-        '    include("${DUCC0_BENCH_CMAKE_HELPER}")\n'
-        "    ducc0_bench_configure_multiarch_link(${PKGNAME})"
-    )
-    if cmake_text.count(old_link) != 1:
-        raise RuntimeError(f"{config['id']}: unexpected multiarch CMake link context")
-    cmake_path.write_text(cmake_text.replace(old_link, new_link, 1), encoding="utf-8")
+    cmake_path.write_text(
+        cmake_text.replace(old_ipo, "set(CMAKE_INTERPROCEDURAL_OPTIMIZATION False)", 1),
+        encoding="utf-8")
 
     source_changes = run_git(source, "diff", "--name-only", "--",
                              "src/ducc0/fft/fft.h",
@@ -200,8 +183,8 @@ def prepare_variant(source: Path, config: dict, repo_root: Path) -> dict:
             "historical_benchmark_commit_excluded": "449505438c0fbd1e4544b2ae95653d2b1a150d1b",
         },
         "benchmark_cmake_patch": (
-            "temporary CMakeLists.txt patch: global IPO disabled for common targets, "
-            "multiarch link call delegated to the profile-local helper"),
+            "temporary CMakeLists.txt patch: global IPO disabled; "
+            "upstream direct v1/v3/v4 profile-object link retained"),
     }
 
 
@@ -230,9 +213,8 @@ def main() -> int:
         "base_branch": "multiarch",
         "base_sha": BASE_SHA,
         "pinned_base_commit_fetched_from_upstream": fetched_base,
-        "fork_multiarch_head_observed_at_branch_creation": "8aabaa0e925812a440f414e1df5cb817c4b70aa5",
-        "source_preparation": "eight detached git worktrees from one pinned base commit",
-        "factors": ["profile_local_lto", "special_mul_always_inline_fix", "fft_tweaks"],
+        "source_preparation": "four detached git worktrees from one pinned base commit",
+        "factors": ["special_mul_always_inline_fix", "fft_tweaks"],
         "special_mul_factor": {
             "on": "retain the upstream DUCC0_ALWAYS_INLINE annotation",
             "off": "remove only DUCC0_ALWAYS_INLINE on detail_fft::special_mul",
