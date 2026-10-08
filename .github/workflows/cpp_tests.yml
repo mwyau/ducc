@@ -1,5 +1,5 @@
 name: ducc-cpp-tests
-on: [workflow_dispatch]
+on: [workflow_dispatch, pull_request]
 
 #on:
 #  push:
