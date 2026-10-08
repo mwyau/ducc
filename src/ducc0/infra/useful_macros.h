@@ -60,6 +60,18 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define DUCC0_NAMESPACE ducc0
 #endif
 
+#if defined(__has_attribute)
+#if __has_attribute(hot)
+#define DUCC0_HOT [[gnu::hot]]
+#else
+#define DUCC0_HOT
+#endif
+#elif defined(__GNUC__)
+#define DUCC0_HOT [[gnu::hot]]
+#else
+#define DUCC0_HOT
+#endif
+
 #if defined(__GNUC__)
 #define DUCC0_NOINLINE [[gnu::noinline]]
 #define DUCC0_ALWAYS_INLINE [[gnu::always_inline]] inline

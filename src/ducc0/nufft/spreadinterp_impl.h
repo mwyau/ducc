@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <set>
+#include "ducc0/infra/useful_macros.h"
 #include "ducc0/infra/simd.h"
 #include "ducc0/infra/bucket_sort.h"
 #include "ducc0/math/gridding_kernel.h"
@@ -323,7 +324,7 @@ template<typename Tcalc, typename Tacc, typename Tcoord, typename Tidx> class Sp
             px0r(bufr.data()), px0i(bufi.data()), mutexes(mutexes_) {}
         ~HelperNu2u() { dump(); }
 
-        [[gnu::hot]] DUCC0_ALWAYS_INLINE void prep_for_index(array<int64_t,ndim> ind)
+        DUCC0_HOT DUCC0_ALWAYS_INLINE void prep_for_index(array<int64_t,ndim> ind)
           {
           if (ind==i0) return;
           i0 = ind;
@@ -375,7 +376,7 @@ template<typename Tcalc, typename Tacc, typename Tcoord, typename Tidx> class Sp
             bufr({size_t(suvec)}), bufi({size_t(suvec)}),
             px0r(bufr.data()), px0i(bufi.data()) {}
 
-        [[gnu::hot]] DUCC0_ALWAYS_INLINE void prep_for_index(array<int64_t,ndim> ind)
+        DUCC0_HOT DUCC0_ALWAYS_INLINE void prep_for_index(array<int64_t,ndim> ind)
           {
           if (ind==i0) return;
           i0 = ind;
@@ -390,7 +391,7 @@ template<typename Tcalc, typename Tacc, typename Tcoord, typename Tidx> class Sp
           }
       };
 
-    template<size_t SUPP, typename Tpoints> [[gnu::hot]] void spreading_helper
+    template<size_t SUPP, typename Tpoints> DUCC0_HOT void spreading_helper
       (size_t supp, const cmav<Tcoord,2> &coords,
       const cmav<complex<Tpoints>,1> &points,
       const vmav<complex<Tcalc>,ndim> &grid) const
@@ -486,7 +487,7 @@ template<typename Tcalc, typename Tacc, typename Tcoord, typename Tidx> class Sp
         });
       }
 
-    template<size_t SUPP, typename Tpoints> [[gnu::hot]] void interpolation_helper
+    template<size_t SUPP, typename Tpoints> DUCC0_HOT void interpolation_helper
       (size_t supp, const cmav<complex<Tcalc>,ndim> &grid,
       const cmav<Tcoord,2> &coords, const vmav<complex<Tpoints>,1> &points) const
       {
@@ -718,7 +719,7 @@ template<typename Tcalc, typename Tacc, typename Tcoord, typename Tidx> class Sp
 
         constexpr int lineJump() const { return sv; }
 
-        [[gnu::hot]] DUCC0_ALWAYS_INLINE void prep(array<double,ndim> in)
+        DUCC0_HOT DUCC0_ALWAYS_INLINE void prep(array<double,ndim> in)
           {
           array<double,ndim> frac;
           auto i0old = i0;
@@ -815,7 +816,7 @@ template<typename Tcalc, typename Tacc, typename Tcoord, typename Tidx> class Sp
 
         constexpr int lineJump() const { return 2*svvec; }
 
-        [[gnu::hot]] DUCC0_ALWAYS_INLINE void prep(array<double,ndim> in)
+        DUCC0_HOT DUCC0_ALWAYS_INLINE void prep(array<double,ndim> in)
           {
           array<double,ndim> frac;
           auto i0old = i0;
@@ -903,7 +904,7 @@ template<typename Tcalc, typename Tacc, typename Tcoord, typename Tidx> class Sp
 
         constexpr int lineJump() const { return svvec; }
 
-        [[gnu::hot]] DUCC0_ALWAYS_INLINE void prep(array<double,ndim> in)
+        DUCC0_HOT DUCC0_ALWAYS_INLINE void prep(array<double,ndim> in)
           {
           array<double,ndim> frac;
           auto i0old = i0;
@@ -924,7 +925,7 @@ template<typename Tcalc, typename Tacc, typename Tcoord, typename Tidx> class Sp
           }
       };
 
-    template<size_t SUPP, typename Tpoints> [[gnu::hot]] void spreading_helper
+    template<size_t SUPP, typename Tpoints> DUCC0_HOT void spreading_helper
       (size_t supp, const cmav<Tcoord,2> &coords,
       const cmav<complex<Tpoints>,1> &points,
       const vmav<complex<Tcalc>,ndim> &grid) const
@@ -1026,7 +1027,7 @@ template<typename Tcalc, typename Tacc, typename Tcoord, typename Tidx> class Sp
         });
       }
 
-    template<size_t SUPP, typename Tpoints> [[gnu::hot]] void interpolation_helper
+    template<size_t SUPP, typename Tpoints> DUCC0_HOT void interpolation_helper
       (size_t supp, const cmav<complex<Tcalc>,ndim> &grid,
       const cmav<Tcoord,2> &coords, const vmav<complex<Tpoints>,1> &points) const
       {
@@ -1314,7 +1315,7 @@ template<typename Tcalc, typename Tacc, typename Tcoord,typename Tidx> class Spr
         constexpr int lineJump() const { return sw; }
         constexpr int planeJump() const { return sv*sw; }
 
-        [[gnu::hot]] DUCC0_ALWAYS_INLINE void prep(array<double,ndim> in)
+        DUCC0_HOT DUCC0_ALWAYS_INLINE void prep(array<double,ndim> in)
           {
           array<double,ndim> frac;
 
@@ -1420,7 +1421,7 @@ template<typename Tcalc, typename Tacc, typename Tcoord,typename Tidx> class Spr
         constexpr int lineJump() const { return 2*swvec; }
         constexpr int planeJump() const { return 2*sv*swvec; }
 
-        [[gnu::hot]] DUCC0_ALWAYS_INLINE void prep(array<double,ndim> in)
+        DUCC0_HOT DUCC0_ALWAYS_INLINE void prep(array<double,ndim> in)
           {
           array<double,ndim> frac;
           auto i0old = i0;
@@ -1515,7 +1516,7 @@ template<typename Tcalc, typename Tacc, typename Tcoord,typename Tidx> class Spr
         constexpr int lineJump() const { return sw; }
         constexpr int planeJump() const { return sv*sw; }
 
-        [[gnu::hot]] DUCC0_ALWAYS_INLINE void prep(array<double,ndim> in)
+        DUCC0_HOT DUCC0_ALWAYS_INLINE void prep(array<double,ndim> in)
           {
           array<double,ndim> frac;
 
@@ -1538,7 +1539,7 @@ template<typename Tcalc, typename Tacc, typename Tcoord,typename Tidx> class Spr
           }
       };
 
-    template<size_t SUPP, typename Tpoints> [[gnu::hot]] void spreading_helper
+    template<size_t SUPP, typename Tpoints> DUCC0_HOT void spreading_helper
       (size_t supp, const cmav<Tcoord,2> &coords,
       const cmav<complex<Tpoints>,1> &points,
       const vmav<complex<Tcalc>,ndim> &grid) const
@@ -1668,7 +1669,7 @@ else
         });
       }
 
-    template<size_t SUPP, typename Tpoints> [[gnu::hot]] void interpolation_helper
+    template<size_t SUPP, typename Tpoints> DUCC0_HOT void interpolation_helper
       (size_t supp, const cmav<complex<Tcalc>,ndim> &grid,
       const cmav<Tcoord,2> &coords, const vmav<complex<Tpoints>,1> &points) const
       {
