@@ -1,5 +1,6 @@
 name: ducc-tests
 on:
+  pull_request:
   workflow_dispatch:
     inputs:
       binding:
@@ -82,8 +83,8 @@ jobs:
             os: windows-2025
           - name: windows-11-arm
             os: windows-11-arm
-        binding: ${{ fromJSON(inputs.binding == 'both' && '["pybind11","nanobind"]' || format('["{0}"]', inputs.binding)) }}
-        optimization: ${{ fromJSON(inputs.optimization == 'both' && '["native","portable"]' || format('["{0}"]', inputs.optimization)) }}
+        binding: ${{ fromJSON((inputs.binding || 'pybind11') == 'both' && '["pybind11","nanobind"]' || format('["{0}"]', inputs.binding || 'pybind11')) }}
+        optimization: ${{ fromJSON((inputs.optimization || 'native') == 'both' && '["native","portable"]' || format('["{0}"]', inputs.optimization || 'native')) }}
         exclude:
           - binding: nanobind
             optimization: portable
@@ -141,7 +142,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        binding: ${{ fromJSON(inputs.binding == 'both' && '["pybind11","nanobind"]' || format('["{0}"]', inputs.binding)) }}
+        binding: ${{ fromJSON((inputs.binding || 'pybind11') == 'both' && '["pybind11","nanobind"]' || format('["{0}"]', inputs.binding || 'pybind11')) }}
 
     steps:
       - uses: actions/checkout@v7
@@ -179,7 +180,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        binding: ${{ fromJSON(inputs.binding == 'both' && '["pybind11","nanobind"]' || format('["{0}"]', inputs.binding)) }}
+        binding: ${{ fromJSON((inputs.binding || 'pybind11') == 'both' && '["pybind11","nanobind"]' || format('["{0}"]', inputs.binding || 'pybind11')) }}
 
     steps:
       - uses: actions/checkout@v7
