@@ -1,0 +1,35 @@
+name: ducc-fft-bench
+
+on:
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      DUCC0_OPTIMIZATION: multiarch-strip
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install FFT benchmark dependencies
+        run: python -m pip install --user numpy scipy pyfftw matplotlib
+      - name: Build DUCC multiarch
+        run: python -m pip install --user .
+      - name: Benchmark FFT against FFTW, SciPy and NumPy
+        run: |
+          mkdir -p fft-bench-results
+          lscpu > fft-bench-results/lscpu.txt
+          c++ --version > fft-bench-results/compiler.txt
+          python -m pip freeze > fft-bench-results/packages.txt
+          python python/demos/fft_bench.py --output-dir fft-bench-results --samples 4 --repeats 5
+      - name: Upload charts and raw measurements
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: fft-bench-results
+          path: fft-bench-results/
+          if-no-files-found: warn
