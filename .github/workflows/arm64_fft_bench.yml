@@ -4,6 +4,7 @@ name: ARM64 FFT dispatch benchmarks
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+    branches: [multiarch]
   workflow_dispatch:
 
 permissions:
