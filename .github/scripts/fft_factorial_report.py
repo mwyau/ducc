@@ -488,7 +488,7 @@ def make_report(output_dir: Path) -> tuple[str, int]:
             add_case_table(lines, profile, ["Case", *VARIANT_IDS], rows)
         if reference == "numpy":
             lines.extend(["### Actual output dtypes", "",
-                          "The dtype table reports observed output dtypes. NumPy's FFT API promotes single-precision inputs to double precision; FFTW, SciPy, and DUCC retain single-precision outputs where supported.", ""])
+                          "The dtype table reports the actual output dtype returned by each installed library for every operation and input precision. Do not assume dtype promotion or preservation without checking these observations.", ""])
             lines.extend(markdown_table(
                 ["Operation / input precision", "DUCC output", "FFTW output",
                  "SciPy output", "NumPy output"],
