@@ -12,6 +12,11 @@ using profile_mask = std::uint32_t;
 constexpr profile_mask profile_bit(int psabi_level)
   { return (psabi_level >= 1 && psabi_level <= 4) ? (1u << psabi_level) : 0; }
 
+using arm_profile_mask = std::uint32_t;
+
+constexpr arm_profile_mask arm_profile_bit(int profile)
+  { return (profile >= 1 && profile <= 3) ? (1u << profile) : 0; }
+
 // No v2 build is compiled; x86-64-v2 hosts use the v1 build.
 inline constexpr profile_mask ducc_compiled_profiles_mask =
     profile_bit(1) | profile_bit(3) | profile_bit(4);
@@ -24,6 +29,38 @@ struct profile_state
   };
 
 namespace detail {
+
+struct arm_features
+  {
+  bool neon = false;
+  bool sve = false;
+  bool sve2 = false;
+  };
+
+constexpr bool usable_arm_sve(const arm_features &features)
+  { return features.neon && features.sve; }
+
+constexpr bool usable_arm_sve2(const arm_features &features)
+  { return usable_arm_sve(features) && features.sve2; }
+
+constexpr bool supports_arm_profile(const arm_features &features,
+                                    int profile)
+  {
+  switch (profile)
+    {
+    case 1: return true; // NEON is the Linux AArch64 baseline.
+    case 2: return usable_arm_sve(features);
+    case 3: return usable_arm_sve2(features);
+    default: return false;
+    }
+  }
+
+constexpr int arm_host_profile(const arm_features &features)
+  {
+  if (usable_arm_sve2(features)) return 3;
+  if (usable_arm_sve(features)) return 2;
+  return 1;
+  }
 
 struct x86_features
   {
@@ -98,7 +135,14 @@ constexpr int psabi_level(const x86_features &features)
 struct cpu_capabilities
   {
   int x86_psabi_level = 0;
+  detail::arm_features arm;
   std::vector<std::string> features;
+  };
+
+struct arm_profile_state
+  {
+  int configured_limit;
+  int active_profile;
   };
 
 const char *architecture_name();
@@ -113,6 +157,16 @@ int select_profile(int host_psabi_level, int configured_limit,
 const char *profile_name(int psabi_level);
 profile_state current_profile_state(int host_psabi_level,
   profile_mask profiles = ducc_compiled_profiles_mask);
+
+std::vector<int> compiled_arm_profiles(arm_profile_mask profiles);
+std::vector<int> available_arm_profiles(arm_profile_mask profiles,
+                                        const detail::arm_features &features);
+int select_arm_profile(const detail::arm_features &features,
+                       int configured_limit, arm_profile_mask profiles);
+int configured_arm_profile_limit();
+const char *arm_profile_name(int profile);
+arm_profile_state current_arm_profile_state(
+  const detail::arm_features &features, arm_profile_mask profiles);
 
 } // namespace ducc0_multiarch
 

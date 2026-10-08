@@ -52,6 +52,17 @@ const char *profile_name(int psabi_level)
     }
   }
 
+const char *arm_profile_name(int profile)
+  {
+  switch (profile)
+    {
+    case 1: return "neon";
+    case 2: return "sve";
+    case 3: return "sve2";
+    default: return "unknown";
+    }
+  }
+
 std::vector<int> compiled_profiles(profile_mask profiles)
   {
   std::vector<int> result;
@@ -79,6 +90,37 @@ int select_profile(int host_psabi_level, int configured_limit,
   return 0;
   }
 
+std::vector<int> compiled_arm_profiles(arm_profile_mask profiles)
+  {
+  std::vector<int> result;
+  for (int profile=1; profile<=3; ++profile)
+    if (profiles & arm_profile_bit(profile)) result.push_back(profile);
+  return result;
+  }
+
+std::vector<int> available_arm_profiles(
+  arm_profile_mask profiles, const detail::arm_features &features)
+  {
+  std::vector<int> result;
+  for (int profile=1; profile<=3; ++profile)
+    if ((profiles & arm_profile_bit(profile))
+        && detail::supports_arm_profile(features, profile))
+      result.push_back(profile);
+  return result;
+  }
+
+int select_arm_profile(const detail::arm_features &features,
+                       int configured_limit, arm_profile_mask profiles)
+  {
+  const int limit = std::min(std::min(detail::arm_host_profile(features),
+                                      configured_limit), 3);
+  for (int profile=limit; profile>=1; --profile)
+    if ((profiles & arm_profile_bit(profile))
+        && detail::supports_arm_profile(features, profile))
+      return profile;
+  return 0;
+  }
+
 int configured_psabi_limit()
   {
   const char *value = std::getenv("DUCC0_MAX_PSABI_LEVEL");
@@ -97,6 +139,17 @@ int configured_psabi_limit()
   if (parsed < 1) return 1;
   if (parsed > 4) return 4;
   return static_cast<int>(parsed);
+  }
+
+int configured_arm_profile_limit()
+  {
+  const char *value = std::getenv("DUCC0_MAX_ARM_PROFILE");
+  if (value == nullptr) return 3;
+  if (std::string(value) == "neon") return 1;
+  if (std::string(value) == "sve") return 2;
+  if (std::string(value) == "sve2") return 3;
+  throw std::runtime_error(
+    "invalid DUCC0_MAX_ARM_PROFILE: expected neon, sve, or sve2");
   }
 
 #if defined(__linux__) && defined(__x86_64__)
@@ -180,7 +233,7 @@ cpu_capabilities detect_cpu_capabilities()
   if (detail::usable_avx(features)) names.emplace_back("avx");
   if (detail::usable_avx2(features)) names.emplace_back("avx2");
   if (detail::usable_avx512(features)) names.emplace_back("avx512");
-  return {detail::psabi_level(features), names};
+  return {detail::psabi_level(features), {}, names};
   }
 
 #else
@@ -188,23 +241,27 @@ cpu_capabilities detect_cpu_capabilities()
 cpu_capabilities detect_cpu_capabilities()
   {
   std::vector<std::string> names;
+  detail::arm_features arm;
 #if defined(__linux__) && defined(__aarch64__)
   const auto hwcap = getauxval(AT_HWCAP);
 #ifdef HWCAP_ASIMD
-  if (hwcap & HWCAP_ASIMD) names.emplace_back("neon");
+  arm.neon = (hwcap & HWCAP_ASIMD) != 0;
 #endif
 #ifdef HWCAP_SVE
-  if (hwcap & HWCAP_SVE) names.emplace_back("sve");
+  arm.sve = (hwcap & HWCAP_SVE) != 0;
 #endif
-#ifdef HWCAP2_SVE2
   unsigned long hwcap2 = 0;
 #ifdef AT_HWCAP2
   hwcap2 = getauxval(AT_HWCAP2);
 #endif
-  if (hwcap2 & HWCAP2_SVE2) names.emplace_back("sve2");
+#ifdef HWCAP2_SVE2
+  arm.sve2 = (hwcap2 & HWCAP2_SVE2) != 0;
 #endif
+  if (arm.neon) names.emplace_back("neon");
+  if (detail::usable_arm_sve(arm)) names.emplace_back("sve");
+  if (detail::usable_arm_sve2(arm)) names.emplace_back("sve2");
 #endif
-  return {0, names};
+  return {0, arm, names};
   }
 
 #endif
@@ -215,6 +272,14 @@ profile_state current_profile_state(int host_psabi_level,
   const int configured_limit = configured_psabi_limit();
   return {host_psabi_level, configured_limit,
           select_profile(host_psabi_level, configured_limit, profiles)};
+  }
+
+arm_profile_state current_arm_profile_state(
+  const detail::arm_features &features, arm_profile_mask profiles)
+  {
+  const int configured_limit = configured_arm_profile_limit();
+  return {configured_limit,
+          select_arm_profile(features, configured_limit, profiles)};
   }
 
 } // namespace ducc0_multiarch
