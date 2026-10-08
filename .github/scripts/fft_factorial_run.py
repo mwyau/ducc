@@ -909,6 +909,11 @@ def validate_reverse_final_link(config: dict, diagnostics: dict, common_info: di
             reverse_dir, profile, python_executable, build_log)
     if set(correctness) != {"1", "3"}:
         raise RuntimeError("reverse extension correctness must run only at v1 and v3")
+    imports_passed = all(item.get("import") == "pass"
+                         for item in correctness.values())
+    import_failures = [item.get("profile", profile)
+                       for profile, item in correctness.items()
+                       if item.get("import") != "pass"]
     archived_extension = artifact / "reverse-order-extension" / "E" / normal_extension.name
     archived_extension.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(reverse_extension, archived_extension)
@@ -937,7 +942,13 @@ def validate_reverse_final_link(config: dict, diagnostics: dict, common_info: di
         "gnu_lto_sections": False,
         "python_init_symbol": "PyInit_ducc0",
         "profile_symbol_counts": profile_symbol_counts,
-        "import": "pass at v1 and v3 configured limits",
+        "import": ("pass at v1 and v3 configured limits" if imports_passed else
+                   "fail at " + ", ".join(import_failures)),
+        "imports_by_profile": {
+            item.get("profile", {"1": "x86-64", "3": "x86-64-v3"}[profile]):
+                item.get("import", "unavailable")
+            for profile, item in correctness.items()
+        },
         "correctness_profiles": ["x86-64", "x86-64-v3"],
         "correctness": correctness,
         "v4_execution": "not run; compiled, linked, and disassembled only",
