@@ -17,7 +17,10 @@ def verify_vector_length(isa, bits):
     assert ducc0.misc.cpu_info()["architecture"] == "aarch64"
     info = ducc0.misc.cpu_info()
     assert "sve" in info["features"], info
-    assert ("sve2" in info["features"]) == (isa == "sve2"), info
+    # QEMU user-mode max exposes SVE2 even for an SVE1-targeted binary.
+    # The compile-time ISA is checked separately by the C++ probe.
+    if isa == "sve2":
+        assert "sve2" in info["features"], info
 
     # Linux PR_SVE_GET_VL returns a vector length in bytes in its low 16 bits.
     libc = ctypes.CDLL(None, use_errno=True)
