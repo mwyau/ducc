@@ -252,28 +252,27 @@ jobs:
               export DUCC0_OPTIMIZATION=native
               export DUCC0_CFLAGS="-march=armv8-a+${TARGET_ISA} -msve-vector-bits=${TARGET_BITS}"
 
-              # Fixed-width SVE is NOT used for portable multibuild wheels.
-              python -m pip install --no-cache-dir --no-build-isolation \
-                --no-deps -v .
-
+              # Fail fast on invalid emulation parameters, before the long
+              # whole-module DUCC build. QEMU user-mode max already exposes
+              # SVE2; sve2=on/off is not a supported -cpu max property.
+              cpu="max,sve${TARGET_BITS}=on,sve-default-vector-length=$((TARGET_BITS / 8))"
+              expected_sve2=0
+              if [ "$TARGET_ISA" = "sve2" ]; then
+                expected_sve2=1
+              fi
+              expected_lanes=$((TARGET_BITS / 64))
               g++-15 -std=c++17 -O3 \
                 -march="armv8-a+${TARGET_ISA}" \
                 -msve-vector-bits="${TARGET_BITS}" \
                 test/arm64_simd_probe.cc -o /tmp/ducc-sve-probe
-
-              cpu="max,sve${TARGET_BITS}=on,sve-default-vector-length=$((TARGET_BITS / 8))"
-              if [ "$TARGET_ISA" = "sve" ]; then
-                cpu="${cpu},sve2=off"
-                expected_sve2=0
-              else
-                cpu="${cpu},sve2=on"
-                expected_sve2=1
-              fi
-              expected_lanes=$((TARGET_BITS / 64))
               probe_out="$(qemu-aarch64 -cpu "$cpu" /tmp/ducc-sve-probe)"
               printf "%s\n" "$probe_out"
               printf "%s\n" "$probe_out" | grep -q \
                 "backend=SVE lanes=${expected_lanes} sve_target=1 sve_bits=${TARGET_BITS} sve2_target=${expected_sve2}"
+
+              # Fixed-width SVE is NOT used for portable multibuild wheels.
+              python -m pip install --no-cache-dir --no-build-isolation \
+                --no-deps -v .
 
               # Real ISA/VL checks plus FFT, SHT, NUFFT, wgridder smoke tests.
               qemu-aarch64 -cpu "$cpu" /tmp/ducc-sve-env/bin/python \
