@@ -38,6 +38,7 @@ def verify_fft():
     # transform exercises DUCC's separate scalar/within-transform path.
     for dtype in (np.complex64, np.complex128):
         for shape in ((127,), (6, 128), (6, 127)):
+            print(f"START FFT complex dtype={dtype.__name__} shape={shape}", flush=True)
             x = (rng.normal(size=shape) + 1j*rng.normal(size=shape)).astype(dtype)
             y = ducc0.fft.c2c(x, axes=(-1,), forward=True, nthreads=1)
             ref = np.fft.fft(x, axis=-1)
@@ -45,6 +46,7 @@ def verify_fft():
                 rtol=4e-5 if dtype == np.complex64 else 2e-12,
                 atol=4e-5 if dtype == np.complex64 else 2e-12)
     for dtype in (np.float32, np.float64):
+        print(f"START FFT real dtype={dtype.__name__} shape=(5, 96)", flush=True)
         x = rng.normal(size=(5, 96)).astype(dtype)
         spectrum = ducc0.fft.r2c(x, axes=(-1,), forward=True, nthreads=1)
         recovered = ducc0.fft.c2r(
@@ -119,8 +121,11 @@ def main():
     args = parser.parse_args()
     verify_vector_length(args.isa, args.bits)
     verify_fft()
+    print("START SHT", flush=True)
     verify_sht()
+    print("START NUFFT", flush=True)
     verify_nufft()
+    print("START wgridder", flush=True)
     verify_wgridder()
     print("PASS fixed-width SVE QEMU smoke suite", flush=True)
 
