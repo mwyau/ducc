@@ -1,210 +1,281 @@
-name: ducc-tests
+# Branch-specific native AArch64 validation for the ARM64 multiarch dispatcher.
+# The hosted ubuntu-24.04-arm runner is expected to expose NEON, SVE and SVE2.
+name: arm64-multiarch-tests
+
 on:
+  push:
+    branches:
+      - feat/arm64-multiarch
+    paths-ignore:
+      - '.github/workflows/arm64_fft_bench.yml'
+      - '.github/scripts/arm64_fft_bench.py'
   workflow_dispatch:
-    inputs:
-      binding:
-        description: Python binding
-        type: choice
-        required: true
-        default: pybind11
-        options:
-          - pybind11
-          - nanobind
-          - both
-      optimization:
-        description: Optimization
-        type: choice
-        required: true
-        default: native
-        options:
-          - native
-          - portable
-          - both
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arm64-multiarch-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  test:
-    name: ${{ matrix.platform.name }} / ${{ matrix.binding }} / ${{ matrix.optimization }}
-    runs-on: ${{ matrix.platform.os }}
-    env:
-      DUCC0_OPTIMIZATION: ${{ matrix.optimization }}
+  native-arm64:
+    name: ARM64 / Python ${{ matrix.python }} / ${{ matrix.binding }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        platform:
-          - name: python-3.11
-            os: ubuntu-24.04
-            python: '3.11'
-          - name: python-3.12
-            os: ubuntu-24.04
-            python: '3.12'
-          - name: python-3.13
-            os: ubuntu-24.04
-            python: '3.13'
-          - name: python-3.14
-            os: ubuntu-24.04
-            python: '3.14'
-          - name: python-3.14t
-            os: ubuntu-24.04
-            python: '3.14t'
-          - name: python-3.15
-            os: ubuntu-24.04
-            python: '3.15'
-          - name: python-3.15t
-            os: ubuntu-24.04
-            python: '3.15t'
-          - name: ubuntu-22.04
-            os: ubuntu-22.04
-          - name: ubuntu-24.04-intel
-            os: ubuntu-24.04
-            compiler: intel
-          - name: ubuntu-24.04-clang
-            os: ubuntu-24.04
-            compiler: clang
-          - name: ubuntu-26.04
-            os: ubuntu-26.04
-          - name: ubuntu-22.04-arm
-            os: ubuntu-22.04-arm
-          - name: ubuntu-24.04-arm
-            os: ubuntu-24.04-arm
-          - name: ubuntu-26.04-arm
-            os: ubuntu-26.04-arm
-          - name: macos-15-intel
-            os: macos-15-intel
-          - name: macos-26-intel
-            os: macos-26-intel
-          - name: macos-15
-            os: macos-15
-          - name: macos-26
-            os: macos-26
-          - name: windows-2022
-            os: windows-2022
-          - name: windows-2025
-            os: windows-2025
-          - name: windows-11-arm
-            os: windows-11-arm
-        binding: ${{ fromJSON(inputs.binding == 'both' && '["pybind11","nanobind"]' || format('["{0}"]', inputs.binding)) }}
-        optimization: ${{ fromJSON(inputs.optimization == 'both' && '["native","portable"]' || format('["{0}"]', inputs.optimization)) }}
-        exclude:
-          - binding: nanobind
-            optimization: portable
-
+        include:
+          - python: '3.11'
+            binding: pybind11
+          - python: '3.11'
+            binding: nanobind
+          - python: '3.14'
+            binding: pybind11
+          - python: '3.14'
+            binding: nanobind
+          - python: '3.14t'
+            binding: nanobind
+    env:
+      DUCC0_OPTIMIZATION: multiarch
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.platform.python || '3.11' }}
-          allow-prereleases: true
+          python-version: ${{ matrix.python }}
 
-      - name: Install dependencies
-        run: python -m pip install --user --upgrade pytest numpy scipy
-
-      - name: Install Intel compiler
-        if: matrix.platform.compiler == 'intel'
-        run: |
-          wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
-          sudo apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
-          sudo add-apt-repository "deb https://apt.repos.intel.com/oneapi all main"
-          sudo apt update
-          sudo apt install intel-oneapi-compiler-dpcpp-cpp
-
-      - name: Build and install
-        if: matrix.platform.compiler != 'intel' && matrix.platform.compiler != 'clang'
-        shell: bash
-        run: ${{ matrix.binding == 'nanobind' && 'DUCC0_USE_NANOBIND=1' || '' }} python -m pip install --user .
-
-      - name: Build and install with Intel compiler
-        if: matrix.platform.compiler == 'intel'
+      - name: Require native ARM64 with NEON, SVE and SVE2
         shell: bash
         run: |
-          source /opt/intel/oneapi/setvars.sh intel64
-          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
-          ${{ matrix.binding == 'nanobind' && 'DUCC0_USE_NANOBIND=1' || '' }} CC=icx CXX=icpx python -m pip install --user .
+          set -euo pipefail
+          test "$(uname -m)" = "aarch64"
+          lscpu
+          features="$(grep -m1 '^Features' /proc/cpuinfo)"
+          echo "$features"
+          for feature in asimd sve sve2; do
+            if [[ " $features " != *" $feature "* ]]; then
+              echo "::error::Runner lacks required $feature hardware capability"
+              exit 1
+            fi
+          done
+          g++ --version
 
-      - name: Build and install with Clang
-        if: matrix.platform.compiler == 'clang'
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest numpy scipy
+
+      - name: Build ARM64 multibuild from this checkout
         shell: bash
         run: |
-          clang --version
-          ${{ matrix.binding == 'nanobind' && 'DUCC0_USE_NANOBIND=1' || '' }} CC=clang CXX=clang++ python -m pip install --user .
+          set -euo pipefail
+          if [[ "${{ matrix.binding }}" == "nanobind" ]]; then
+            DUCC0_USE_NANOBIND=1 python -m pip install --no-cache-dir -v .
+          else
+            python -m pip install --no-cache-dir -v .
+          fi
 
-      - name: Verify binding
-        run: python -c "import ducc0; assert ducc0.__wrapper__ == '${{ matrix.binding }}'; print(ducc0.__wrapper__)"
+      - name: Verify compiled variants, host capabilities and default dispatch
+        shell: bash
+        env:
+          EXPECTED_BINDING: ${{ matrix.binding }}
+        run: |
+          python - <<'PY'
+          import os
+          import ducc0
+          info = ducc0.misc.cpu_info()
+          print("binding:", ducc0.__wrapper__)
+          print("cpu_info:", info)
+          assert ducc0.__wrapper__ == os.environ["EXPECTED_BINDING"]
+          assert info["architecture"] == "aarch64"
+          assert info["multiarch"] is True
+          assert {"neon", "sve", "sve2"} <= set(info["features"])
+          expected = ["neon", "sve", "sve2"]
+          assert info["compiled_profiles"] == expected, info
+          assert info["available_profiles"] == expected, info
+          assert info["configured_limit"] == "sve2", info
+          assert info["active_profile"] == "sve2", info
+          PY
 
-      - name: Run tests
-        run: python -m pytest python/test -x
+      - name: Test native NEON, SVE and SVE2 dispatch and full numerical suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          for profile in neon sve sve2; do
+            echo "::group::Native ARM64 profile: $profile"
+            DUCC0_MAX_ARM_PROFILE="$profile" EXPECTED_PROFILE="$profile" python - <<'PY'
+          import os
+          import ducc0
+          info = ducc0.misc.cpu_info()
+          assert info["active_profile"] == os.environ["EXPECTED_PROFILE"], info
+          assert info["configured_limit"] == os.environ["EXPECTED_PROFILE"], info
+          assert info["compiled_profiles"] == ["neon", "sve", "sve2"], info
+          print(info)
+          PY
+            DUCC0_MAX_ARM_PROFILE="$profile" python -m pytest -x -q python/test
+            echo "::endgroup::"
+          done
 
-  test-pyodide:
-    name: pyodide / ${{ matrix.binding }} / portable
-    runs-on: ubuntu-26.04
+      - name: Run native C++ selector unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -O2 -Ipython             test/test_multiarch.cc python/multiarch.cc             -o /tmp/ducc-test-multiarch
+          /tmp/ducc-test-multiarch
+
+      - name: Probe experimental SIMD types at every ARM ISA target
+        shell: bash
+        run: |
+          set -euo pipefail
+          for profile in neon sve sve2; do
+            case "$profile" in
+              neon) flags=(-march=armv8-a) ;;
+              sve) flags=(-march=armv8-a+sve -msve-vector-bits=scalable) ;;
+              sve2) flags=(-march=armv8-a+sve2 -msve-vector-bits=scalable) ;;
+            esac
+            g++ -std=c++17 -O3 "${flags[@]}"               test/arm64_simd_probe.cc -o "/tmp/ducc-simd-$profile"
+            echo "::group::SIMD probe: $profile"
+            "/tmp/ducc-simd-$profile"
+            objdump -d --disassemble=ducc_simd_probe "/tmp/ducc-simd-$profile"               > "/tmp/ducc-simd-$profile.asm"
+            grep -E '(fmla|ptrue|whilelo|ld1d|st1d)'               "/tmp/ducc-simd-$profile.asm" | head -n 12 || true
+            echo "::endgroup::"
+          done
+
+  qemu-neon-fallback:
+    name: ARM64 / QEMU Cortex-A76 (no SVE)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 70
     env:
-      DUCC0_OPTIMIZATION: portable
-    strategy:
-      fail-fast: false
-      matrix:
-        binding: ${{ fromJSON(inputs.binding == 'both' && '["pybind11","nanobind"]' || format('["{0}"]', inputs.binding)) }}
-
+      DUCC0_OPTIMIZATION: multiarch
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.14'
-          allow-prereleases: true
+          python-version: '3.11'
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-
-      - name: Build Pyodide wheel
+      - name: Install QEMU and Python test dependencies
         shell: bash
         run: |
-          python -m pip install pyodide-build
-          ${{ matrix.binding == 'nanobind' && 'DUCC0_USE_NANOBIND=1' || '' }} pyodide build .
-          pyodide venv .venv-pyodide
-          .venv-pyodide/bin/python -m pip install pytest numpy scipy
-          .venv-pyodide/bin/python -m pip install dist/*.whl
-          echo "$PWD/.venv-pyodide/bin" >> "$GITHUB_PATH"
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y qemu-user
+          qemu-aarch64 --version
+          python -m pip install --upgrade pip
+          python -m pip install pytest numpy scipy
 
-      - name: Verify binding
-        run: python -c "import ducc0; assert ducc0.__wrapper__ == '${{ matrix.binding }}'; print(ducc0.__wrapper__)"
+      - name: Build combined ARM64 extension with pybind11
+        run: python -m pip install --no-cache-dir -v .
 
-      - name: Run tests
-        run: python -m pytest python/test -x
+      - name: Verify binary imports on emulated NEON-only CPU
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DUCC0_MAX_ARM_PROFILE=sve2
+          qemu-aarch64 -cpu cortex-a76 "$(command -v python)" - <<'PY'
+          import ducc0
+          info = ducc0.misc.cpu_info()
+          print(info)
+          assert info["architecture"] == "aarch64"
+          assert info["multiarch"] is True
+          assert "neon" in info["features"]
+          assert "sve" not in info["features"]
+          assert "sve2" not in info["features"]
+          assert info["active_profile"] == "neon"
+          PY
 
-  test-docker:
-    name: i686 / ${{ matrix.binding }} / portable
-    runs-on: ubuntu-24.04
-    env:
-      DUCC0_OPTIMIZATION: portable
+      - name: Run selector and FFT regression tests under QEMU
+        shell: bash
+        run: |
+          set -euo pipefail
+          DUCC0_MAX_ARM_PROFILE=sve2             qemu-aarch64 -cpu cortex-a76 "$(command -v python)"             -m pytest -q -x python/test/test_multiarch.py python/test/test_fft.py
+
+  # Single-target builds run via QEMU in Docker so no paid SVE256/512 hardware
+  # is needed; do not interpret emulated timings as hardware benchmarks.
+  qemu-sve-docker:
+    name: Docker QEMU / ${{ matrix.isa }} / ${{ matrix.bits }}-bit
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        binding: ${{ fromJSON(inputs.binding == 'both' && '["pybind11","nanobind"]' || format('["{0}"]', inputs.binding)) }}
-
+        include:
+          - isa: sve
+            bits: 256
+          - isa: sve
+            bits: 512
+          - isa: sve2
+            bits: 256
+          - isa: sve2
+            bits: 512
     steps:
       - uses: actions/checkout@v7
-      - name: Run i686 tests in Docker
+
+      - name: Build with GCC 15 and validate fixed-width SVE under QEMU
+        shell: bash
+        env:
+          TARGET_ISA: ${{ matrix.isa }}
+          TARGET_BITS: ${{ matrix.bits }}
         run: |
-          set -euxo pipefail
-          docker pull quay.io/pypa/manylinux_2_28_i686
-          docker run --rm \
-            --platform=linux/i386 \
-            -e DUCC0_OPTIMIZATION \
-            -v "$PWD:/ducc" \
-            -w /ducc \
-            quay.io/pypa/manylinux_2_28_i686 \
-            /bin/bash -c '
-              set -euxo pipefail
-              python3.12 -m venv /tmp/venv
-              source /tmp/venv/bin/activate
+          set -euo pipefail
+          test "$(uname -m)" = "aarch64"
+          docker pull ubuntu:26.04
+          docker run --rm --platform linux/arm64 \
+            -e TARGET_ISA -e TARGET_BITS \
+            -e CI=1 -e PYTHONUNBUFFERED=1 \
+            -v "$PWD:/checkout:ro" \
+            ubuntu:26.04 bash -euxo pipefail -c '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y --no-install-recommends \
+                gcc-15 g++-15 cmake ninja-build python3-dev python3-venv \
+                python3-pip qemu-user ca-certificates
+              test "$(uname -m)" = "aarch64"
+              g++-15 --version
+              qemu-aarch64 --version
+
+              # Read-only checkout; build and install inside /tmp.
+              cp -a /checkout /tmp/ducc-source
+              cd /tmp/ducc-source
+              python3 -m venv /tmp/ducc-sve-env
+              . /tmp/ducc-sve-env/bin/activate
               python -m pip install --upgrade pip
-              # FIXME: scikit-build-core limited to <1.1 for the moment, because otherwise CI breaks for Python 3.14t and 3.15t
-              python -m pip install pytest "scikit-build-core<1.1" nanobind pybind11
-              python -m pip install numpy==2.0.0 -Cbuild-dir=/tmp/numpy-builddir
-              python -c "import struct; assert struct.calcsize(\"P\") == 4; print(\"pointer bits:\", struct.calcsize(\"P\")*8)"
-              g++ --version
-              DUCC0_CFLAGS="-march=i686 -msse2 -mfpmath=sse" \
-                ${{ matrix.binding == 'nanobind' && 'DUCC0_USE_NANOBIND=1' || '' }} python -m pip install --no-build-isolation .
-              python -c "import ducc0; assert ducc0.__wrapper__ == \"${{ matrix.binding }}\"; print(ducc0.__wrapper__)"
-              python -m pytest python/test -x
+              python -m pip install \
+                "scikit-build-core>=1.0,<1.1" pybind11 nanobind numpy
+
+              export CC=gcc-15 CXX=g++-15
+              export CMAKE_BUILD_PARALLEL_LEVEL=2
+              export DUCC0_OPTIMIZATION=native
+              export DUCC0_CFLAGS="-march=armv8-a+${TARGET_ISA} -msve-vector-bits=${TARGET_BITS}"
+
+              # Fail fast on invalid emulation parameters, before the long
+              # whole-module DUCC build. QEMU user-mode max already exposes
+              # SVE2; sve2=on/off is not a supported -cpu max property.
+              cpu="max,sve${TARGET_BITS}=on,sve-default-vector-length=$((TARGET_BITS / 8))"
+              expected_sve2=0
+              if [ "$TARGET_ISA" = "sve2" ]; then
+                expected_sve2=1
+              fi
+              expected_lanes=$((TARGET_BITS / 64))
+              g++-15 -std=c++17 -O3 \
+                -march="armv8-a+${TARGET_ISA}" \
+                -msve-vector-bits="${TARGET_BITS}" \
+                test/arm64_simd_probe.cc -o /tmp/ducc-sve-probe
+              probe_out="$(qemu-aarch64 -cpu "$cpu" /tmp/ducc-sve-probe)"
+              printf "%s\n" "$probe_out"
+              printf "%s\n" "$probe_out" | grep -q \
+                "backend=SVE lanes=${expected_lanes} sve_target=1 sve_bits=${TARGET_BITS} sve2_target=${expected_sve2}"
+
+              # Fixed-width SVE is NOT used for portable multibuild wheels.
+              python -m pip install --no-cache-dir --no-build-isolation \
+                --no-deps -v .
+
+              # Real ISA/VL checks plus FFT, SHT, NUFFT, wgridder smoke tests.
+              qemu-aarch64 -cpu "$cpu" /tmp/ducc-sve-env/bin/python \
+                .github/scripts/arm64_sve_qemu_smoke.py \
+                --isa "$TARGET_ISA" --bits "$TARGET_BITS"
             '

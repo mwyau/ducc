@@ -141,6 +141,8 @@ sdist.include = [
     "python/test/test_wgridder.py",
     "python/test/test_nufft.py",
     "python/test/test_multiarch.py",
+    "test/arm64_simd_probe.cc",
+    "doc/arm64-multiarch.md",
     "python/demos/fft_bench.py",
     "python/demos/fft_stress.py",
     "python/demos/healpix_perftest.py",

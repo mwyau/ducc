@@ -34,6 +34,10 @@ int main()
   constexpr auto v1_only_profiles = ducc0_multiarch::profile_bit(1);
   constexpr auto v3_v4_profiles = ducc0_multiarch::profile_bit(3)
     | ducc0_multiarch::profile_bit(4);
+  constexpr auto arm_all_profiles = ducc0_multiarch::arm_profile_bit(1)
+    | ducc0_multiarch::arm_profile_bit(2)
+    | ducc0_multiarch::arm_profile_bit(3);
+  constexpr auto arm_sve2_only = ducc0_multiarch::arm_profile_bit(3);
 
   struct TestCase
     {
@@ -137,6 +141,38 @@ int main()
       ducc0_multiarch::ducc_compiled_profiles_mask, 4), {1, 3, 4});
   check_profiles("available all profiles on v2 host",
     ducc0_multiarch::available_profiles(all_profiles, 2), {1, 2});
+
+  ducc0_multiarch::detail::arm_features arm_neon{true, false, false};
+  ducc0_multiarch::detail::arm_features arm_sve{true, true, false};
+  ducc0_multiarch::detail::arm_features arm_sve2{true, true, true};
+  ducc0_multiarch::detail::arm_features arm_inconsistent{true, false, true};
+  if (ducc0_multiarch::select_arm_profile(arm_neon, 3, arm_all_profiles) != 1
+      || ducc0_multiarch::select_arm_profile(arm_sve, 3, arm_all_profiles) != 2
+      || ducc0_multiarch::select_arm_profile(arm_sve2, 3, arm_all_profiles) != 3
+      || ducc0_multiarch::select_arm_profile(arm_sve2, 2, arm_all_profiles) != 2
+      || ducc0_multiarch::select_arm_profile(arm_sve2, 1, arm_all_profiles) != 1
+      || ducc0_multiarch::select_arm_profile(
+           arm_inconsistent, 3, arm_all_profiles) != 1
+      || ducc0_multiarch::select_arm_profile(arm_sve, 3, arm_sve2_only) != 0)
+    {
+    std::cerr << "FAIL ARM64 profile selection or inconsistent feature gating\n";
+    ok = false;
+    }
+  check_profiles("compiled ARM64 profiles",
+    ducc0_multiarch::compiled_arm_profiles(arm_all_profiles), {1, 2, 3});
+  check_profiles("available ARM64 profiles with SVE2",
+    ducc0_multiarch::available_arm_profiles(arm_all_profiles, arm_sve2),
+    {1, 2, 3});
+  check_profiles("inconsistent SVE2 without SVE is NEON-only",
+    ducc0_multiarch::available_arm_profiles(
+      arm_all_profiles, arm_inconsistent), {1});
+  if (std::string(ducc0_multiarch::arm_profile_name(1)) != "neon"
+      || std::string(ducc0_multiarch::arm_profile_name(2)) != "sve"
+      || std::string(ducc0_multiarch::arm_profile_name(3)) != "sve2")
+    {
+    std::cerr << "FAIL ARM64 profile names\n";
+    ok = false;
+    }
 
   if (ok) std::cout << "PASS multiarch selection policy\n";
   return ok ? 0 : 1;
