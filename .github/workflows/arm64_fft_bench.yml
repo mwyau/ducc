@@ -2,9 +2,8 @@
 name: ARM64 FFT dispatch benchmarks
 
 on:
-  push:
-    branches:
-      - feat/arm64-multiarch
+  pull_request:
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 permissions:
