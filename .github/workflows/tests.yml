@@ -6,6 +6,9 @@ on:
   push:
     branches:
       - feat/arm64-multiarch
+    paths-ignore:
+      - '.github/workflows/arm64_fft_bench.yml'
+      - '.github/scripts/arm64_fft_bench.py'
   workflow_dispatch:
 
 permissions:
@@ -13,7 +16,7 @@ permissions:
 
 concurrency:
   group: arm64-multiarch-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   native-arm64:
