@@ -1,0 +1,55 @@
+name: ducc-fft-bench
+on:
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    name: Multiarch FFT benchmark
+    runs-on: ubuntu-24.04
+    env:
+      DUCC0_OPTIMIZATION: multiarch-strip
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install benchmark dependencies
+        run: python -m pip install --user --upgrade numpy scipy pyfftw matplotlib
+      - name: Build multiarch extension
+        run: python -m pip install --user .
+      - name: Validate multiarch benchmark build
+        run: python .github/scripts/check_multiarch_profiles.py
+      - name: Capture host and toolchain information
+        run: |
+          mkdir -p fft-bench-results
+          lscpu | tee fft-bench-results/lscpu.txt
+          c++ --version | tee fft-bench-results/compiler.txt
+          python --version | tee fft-bench-results/python.txt
+          python -m pip freeze | tee fft-bench-results/python-packages.txt
+      - name: Run existing FFT benchmark
+        run: >-
+          python python/demos/fft_bench.py
+          --output-dir fft-bench-results
+          --seed 42
+          --samples 4
+          --repeats 5
+          --threads 1
+      - name: Upload figures, raw data, and metadata
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: fft-bench-results-${{ github.run_id }}
+          path: fft-bench-results/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Add artifact link to Actions summary
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Manual FFT benchmark
+
+          [Download all benchmark figures, CSV measurements, and reproducibility metadata]($ARTIFACT_URL)
+
+          The artifact includes the CPU flags from lscpu, compiler and Python versions, package versions, DUCC cpu_info(), tested and skipped profiles, and the benchmark summary.
+          EOF
