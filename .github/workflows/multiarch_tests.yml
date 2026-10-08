@@ -1,0 +1,64 @@
+name: ducc-multiarch-tests
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  profile-correctness:
+    name: Multiarch profiles / x86-64
+    runs-on: ubuntu-24.04
+    env:
+      DUCC0_OPTIMIZATION: multiarch-strip
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: python -m pip install --user --upgrade pytest numpy scipy
+      - name: Build multiarch extension
+        run: python -m pip install --user .
+      - name: Report CPU and supported profiles
+        id: profiles
+        run: python .github/scripts/check_multiarch_profiles.py
+      - name: Run Python tests / x86-64-v1
+        env:
+          DUCC0_MAX_PSABI_LEVEL: '1'
+        run: |
+          python -c 'import ducc0; info = ducc0.misc.cpu_info(); assert info["active_profile"] == "x86-64", info; print(info)'
+          python -m pytest python/test -x
+      - name: Run Python tests / x86-64-v3
+        if: steps.profiles.outputs.v3 == 'true'
+        env:
+          DUCC0_MAX_PSABI_LEVEL: '3'
+        run: |
+          python -c 'import ducc0; info = ducc0.misc.cpu_info(); assert info["active_profile"] == "x86-64-v3", info; print(info)'
+          python -m pytest python/test -x
+      - name: Run Python tests / x86-64-v4
+        if: steps.profiles.outputs.v4 == 'true'
+        env:
+          DUCC0_MAX_PSABI_LEVEL: '4'
+        run: |
+          python -c 'import ducc0; info = ducc0.misc.cpu_info(); assert info["active_profile"] == "x86-64-v4", info; print(info)'
+          python -m pytest python/test -x
+
+  nonmultiarch-cpu-info:
+    name: CPU info / ${{ matrix.optimization }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        optimization: [native, portable]
+    env:
+      DUCC0_OPTIMIZATION: ${{ matrix.optimization }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install pytest
+        run: python -m pip install --user --upgrade pytest
+      - name: Build extension
+        run: python -m pip install --user .
+      - name: Check non-multiarch cpu_info()
+        run: python -m pytest python/test/test_multiarch.py -x
