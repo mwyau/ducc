@@ -95,12 +95,33 @@ using namespace std;
 
 namespace {
 
+// libstdc++ represents partial SVE vectors in full-width registers.
+// Keeping the 256-bit FFT lane caps on SVE512 can make sizeof(simd<T,N>)
+// exceed N*sizeof(T), invalidating compact FFT scratch-buffer layouts.
+// Use full native widths in the 512-bit experimental build; keep all
+// existing lane caps unchanged on NEON, SVE128, and SVE256.
+#if defined(__ARM_FEATURE_SVE_BITS) && (__ARM_FEATURE_SVE_BITS == 512)
+template<typename T> constexpr inline size_t fft_simdlen
+  = min<size_t>(8, native_simd<T>::size());
+template<> constexpr inline size_t fft_simdlen<double>
+  = native_simd<double>::size();
+template<> constexpr inline size_t fft_simdlen<float>
+  = native_simd<float>::size();
+#else
 template<typename T> constexpr inline size_t fft_simdlen
   = min<size_t>(8, native_simd<T>::size());
 template<> constexpr inline size_t fft_simdlen<double>
   = min<size_t>(4, native_simd<double>::size());
 template<> constexpr inline size_t fft_simdlen<float>
   = min<size_t>(8, native_simd<float>::size());
+#endif
+
+#if defined(__ARM_FEATURE_SVE_BITS) && (__ARM_FEATURE_SVE_BITS == 512)
+static_assert(sizeof(typename simd_select<float, fft_simdlen<float>>::type)
+  == fft_simdlen<float>*sizeof(float), "SVE float FFT SIMD storage is not compact");
+static_assert(sizeof(typename simd_select<double, fft_simdlen<double>>::type)
+  == fft_simdlen<double>*sizeof(double), "SVE double FFT SIMD storage is not compact");
+#endif
 template<typename T> using fft_simd = typename simd_select<T,fft_simdlen<T>>::type;
 template<typename T> constexpr inline bool fft_simd_exists = (fft_simdlen<T> > 1);
 
