@@ -1,0 +1,127 @@
+name: FFT inline/tweaks benchmark
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "GitHub runner image (CPU ISA is not guaranteed)"
+        type: choice
+        options: ["ubuntu-24.04", "ubuntu-22.04"]
+        default: "ubuntu-24.04"
+      native_profile:
+        description: "Native ISA: auto=v4 if supported, else v3"
+        type: choice
+        options: ["auto", "v3", "v4"]
+        default: "auto"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fft-inline-tweaks-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    runs-on: ${{ inputs.runner || 'ubuntu-24.04' }}
+    timeout-minutes: 300
+    steps:
+      - name: Check out the actual PR head or manually selected branch commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned benchmark and build dependencies
+        run: >-
+          python -m pip install --disable-pip-version-check
+          numpy==2.5.3 scipy==1.18.1 pyFFTW==0.15.1 matplotlib==3.11.2
+          nanobind==3.0.1 pybind11==3.1.0 scikit-build-core==1.0.3
+          cmake==4.4.3 ninja==1.13.2
+
+      - name: Show host CPU and ISA feature flags
+        run: |
+          lscpu | grep -E 'Architecture:|Model name:|CPU\(s\):|Vendor ID:|Flags:'
+          python - <<'PY'
+          from pathlib import Path
+          import platform
+          print("Host:", platform.platform(), platform.processor())
+          info = Path("/proc/cpuinfo").read_text(errors="replace")
+          flags = next((x.partition(":")[2].strip() for x in info.splitlines()
+                        if x.startswith("flags")), "unavailable")
+          for flag in ("avx2", "fma", "avx512f", "avx512dq", "avx512bw", "avx512vl"):
+              print(f"{flag}: {flag in flags.split()}")
+          PY
+
+      - name: Verify four-variant matrix and compile benchmark scripts
+        run: |
+          python -m compileall -q .github/scripts
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, ".github/scripts")
+          from prepare_factorial_sources import CONFIGS
+          from fft_factorial_benchmark import CASES
+          from fft_factorial_report import VARIANT_IDS
+          expected = [
+              (False, False), (True, False),
+              (False, True), (True, True),
+          ]
+          assert len(CONFIGS) == 4 and len(CASES) == 24
+          assert VARIANT_IDS == ("A", "B", "C", "D")
+          assert [(v["special_mul_fix"], v["fft_tweaks"]) for v in CONFIGS] == expected
+          assert all("profile_lto" not in v for v in CONFIGS)
+          from fft_native_matrix import native_configs
+          for profile in ("x86-64-v3", "x86-64-v4"):
+              configs = native_configs(profile)
+              assert len(configs) == 8
+              assert [c["id"] for c in configs] == [
+                  "NA0", "NB0", "NC0", "ND0",
+                  "NA1", "NB1", "NC1", "ND1"]
+              assert [c["native_lto"] for c in configs] == [False]*4 + [True]*4
+          print("Four-source-variant / 24-case matrix verified.")
+          PY
+
+      - name: Build and benchmark four multiarch inline/tweaks variants
+        env:
+          FFT_FACTORIAL_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PYTHONHASHSEED: "0"
+          MPLBACKEND: Agg
+        run: >-
+          python .github/scripts/fft_factorial_run.py
+          --output-dir "$GITHUB_WORKSPACE/fft-factorial-results"
+          --worktree-root "$RUNNER_TEMP/fft-factorial-source"
+          --ntry 3 --nrepeat 5 --jobs 4
+
+      - name: Build and benchmark eight native LTO/source variants
+        env:
+          PYTHONHASHSEED: "0"
+          MPLBACKEND: Agg
+        run: >-
+          python .github/scripts/fft_native_matrix.py
+          --output-dir "$GITHUB_WORKSPACE/fft-factorial-results"
+          --worktree-root "$RUNNER_TEMP/fft-native-source"
+          --native-profile "${{ inputs.native_profile || 'auto' }}"
+          --ntry 3 --nrepeat 5 --jobs 4
+
+      - name: Write the complete Markdown report to the Actions summary
+        if: always()
+        env:
+          FFT_FACTORIAL_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          python .github/scripts/fft_factorial_report.py
+          --output-dir "$GITHUB_WORKSPACE/fft-factorial-results"
+          --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report, charts, raw timings, and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fft-inline-tweaks-results
+          path: fft-factorial-results/
+          if-no-files-found: warn
