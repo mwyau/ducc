@@ -1,0 +1,73 @@
+# Native within-host NEON/SVE/SVE2 comparison, separate from regression tests.
+name: ARM64 FFT dispatch benchmarks
+
+on:
+  push:
+    branches:
+      - feat/arm64-multiarch
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arm64-fft-bench-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    name: NEON vs SVE vs SVE2 / FFT
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    env:
+      DUCC0_OPTIMIZATION: multiarch-strip
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+      PYTHONUNBUFFERED: '1'
+      OMP_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      MKL_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Require native NEON/SVE/SVE2 runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          lscpu
+          grep -m1 '^Features' /proc/cpuinfo
+          for feature in asimd sve sve2; do
+            if ! grep -qm1 -w "$feature" /proc/cpuinfo; then
+              echo "::error::Required ARM hardware feature missing: $feature"
+              exit 1
+            fi
+          done
+          g++ --version
+
+      - name: Build benchmarked DUCC from this commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade numpy
+          python -m pip install --no-cache-dir -v .
+
+      - name: Compare forced-dispatch FFT performance
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .github/scripts/arm64_fft_bench.py \
+            --samples 4 --repeat 7 --warmup 3 \
+            --output-dir arm64-fft-bench
+          cat arm64-fft-bench/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload raw timing data and summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm64-fft-bench
+          path: arm64-fft-bench/
+          if-no-files-found: warn
