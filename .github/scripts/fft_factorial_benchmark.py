@@ -330,8 +330,16 @@ def _cpu_identity() -> dict:
     }
 
 
-def _profile_state(ducc0, expected_profile: str) -> dict:
+def _profile_state(ducc0, expected_profile: str, native: bool = False) -> dict:
     info = ducc0.misc.cpu_info()
+    if native:
+        if info.get("multiarch") is not False or info.get("architecture") != "x86-64":
+            raise RuntimeError(f"expected a single-ISA native x86-64 build: {info}")
+        return {**info, "build_kind": "native",
+                "compiled_profiles": [expected_profile],
+                "available_profiles": [expected_profile],
+                "configured_limit": expected_profile,
+                "active_profile": expected_profile}
     if info.get("multiarch") is not True:
         raise RuntimeError(f"expected an upstream multiarch build, got {info}")
     if info.get("architecture") != "x86-64":
@@ -349,7 +357,7 @@ def worker_main(args) -> int:
     import ducc0
     import numpy as np
 
-    state = _profile_state(ducc0, args.profile)
+    state = _profile_state(ducc0, args.profile, native=args.native)
     ducc0.misc.preallocate_memory(1)
     cpu_identity = _cpu_identity()
     print(json.dumps({"record_type": "worker_ready", "variant": args.variant,
@@ -457,6 +465,7 @@ def worker_main(args) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--worker", action="store_true")
+    parser.add_argument("--native", action="store_true")
     parser.add_argument("--variant")
     parser.add_argument("--profile", choices=tuple(PROFILE_NAMES.values()))
     parser.add_argument("--nrepeat", type=int, default=5)

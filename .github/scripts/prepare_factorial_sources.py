@@ -105,16 +105,18 @@ def prepare_variant(source: Path, config: dict, repo_root: Path) -> dict:
                        check=True)
         subprocess.run(["git", "-C", str(source), "apply", str(tweak_patch)], check=True)
 
-    # Keep upstream multiarch linking unchanged. Disable IPO for the
-    # complete benchmark extension so all four configurations use no LTO.
-    cmake_path = source / "CMakeLists.txt"
-    cmake_text = cmake_path.read_text(encoding="utf-8")
-    old_ipo = "set(CMAKE_INTERPROCEDURAL_OPTIMIZATION True)"
-    if cmake_text.count(old_ipo) != 1:
-        raise RuntimeError(f"{config['id']}: unexpected global IPO configuration")
-    cmake_path.write_text(
-        cmake_text.replace(old_ipo, "set(CMAKE_INTERPROCEDURAL_OPTIMIZATION False)", 1),
-        encoding="utf-8")
+    # Multiarch and native-no-LTO use independent native objects, without IPO.
+    # Native LTO builds retain the upstream IPO setting and only one ISA target.
+    enable_native_lto = config.get("native_lto", False)
+    if not enable_native_lto:
+        cmake_path = source / "CMakeLists.txt"
+        cmake_text = cmake_path.read_text(encoding="utf-8")
+        old_ipo = "set(CMAKE_INTERPROCEDURAL_OPTIMIZATION True)"
+        if cmake_text.count(old_ipo) != 1:
+            raise RuntimeError(f"{config['id']}: unexpected global IPO configuration")
+        cmake_path.write_text(
+            cmake_text.replace(old_ipo, "set(CMAKE_INTERPROCEDURAL_OPTIMIZATION False)", 1),
+            encoding="utf-8")
 
     source_changes = run_git(source, "diff", "--name-only", "--",
                              "src/ducc0/fft/fft.h",
@@ -131,7 +133,7 @@ def prepare_variant(source: Path, config: dict, repo_root: Path) -> dict:
             f"expected {expected_changes}")
 
     actual_all = run_git(source, "diff", "--name-only").splitlines()
-    if sorted(actual_all) != sorted([*expected_changes, "CMakeLists.txt"]):
+    if sorted(actual_all) != sorted([*expected_changes, *([] if enable_native_lto else ["CMakeLists.txt"])]):
         raise RuntimeError(f"{config['id']}: unexpected worktree changes: {actual_all}")
     subprocess.run(["git", "-C", str(source), "diff", "--check"], check=True)
 
@@ -183,8 +185,8 @@ def prepare_variant(source: Path, config: dict, repo_root: Path) -> dict:
             "historical_benchmark_commit_excluded": "449505438c0fbd1e4544b2ae95653d2b1a150d1b",
         },
         "benchmark_cmake_patch": (
-            "temporary CMakeLists.txt patch: global IPO disabled; "
-            "upstream direct v1/v3/v4 profile-object link retained"),
+            "upstream native IPO enabled; single ISA" if enable_native_lto else
+            "temporary CMakeLists.txt patch: global IPO disabled"),
     }
 
 

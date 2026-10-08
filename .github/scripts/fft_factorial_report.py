@@ -384,6 +384,13 @@ def make_report(output_dir: Path) -> tuple[str, int]:
     timings = load_jsonl(output_dir / "timings.jsonl")
     references_raw = load_jsonl(output_dir / "references.jsonl")
     ducc, references = index_records(timings, references_raw)
+    native_status = load_json(output_dir / "native-status.json", {})
+    native_raw = load_jsonl(output_dir / "native-timings.jsonl")
+    native_reference_raw = load_jsonl(output_dir / "native-references.jsonl")
+    native_ducc, native_references = index_records(native_raw, native_reference_raw)
+    native_profile = native_status.get("selected_native_profile")
+    native_ids = tuple(f"N{variant}{lto}" for lto in (0, 1) for variant in VARIANT_IDS)
+    combined_ducc = {**ducc, **native_ducc}
     supported = [profile for profile in PROFILES
                  if profile in status.get("supported_profiles", [])]
     skipped = [profile for profile in PROFILES if profile not in supported]
@@ -414,6 +421,7 @@ def make_report(output_dir: Path) -> tuple[str, int]:
         f"- **Benchmark source commit:** `{status.get('benchmark_source_head_sha', 'unavailable')}`.",
         f"- **Runner CPU:** {cpu_label}; architecture `{status.get('runner_architecture', 'unavailable')}`.",
         f"- **Compiler:** {compiler.get('version', 'unavailable')}.",
+        f"- **Native comparison:** {native_status.get('status', 'unavailable')} (requested {native_status.get('requested_native_profile', 'unavailable')}, selected {native_profile or 'none'}); eight single-ISA source/LTO configurations.",
         f"- **Supported profiles:** {profiles_text}; **skipped:** {skipped_text}.",
         f"- **Benchmark cases:** {len(CASES)} operation/precision/dimension or fixed-shape cases per supported profile.",
         f"- **Factorial cells:** {expected} expected, {completed} fully timed, {failed} with correctness failures, {incomplete} incomplete.",
@@ -643,6 +651,108 @@ def make_report(output_dir: Path) -> tuple[str, int]:
                                     unavailable, align_right=set()))
     else:
         lines.append("All DUCC absolute timings and all reference comparisons for supported profiles are present.")
+    lines.extend(["## L. Single-ISA native × LTO × inline/tweaks matrix", "",
+                  "The native builds contain only the selected ISA, with either complete same-ISA LTO or no LTO. They do **not** use the multiarch profile-local LTO strategy. All native and multiarch timings are from the same hosted runner, but measurements occurred sequentially and remain sensitive to runner noise.", ""])
+    native_cpu = native_status.get("cpu_identity", {})
+    native_features = set(native_cpu.get("features", []))
+    cpu_flags = ", ".join(flag for flag in (
+        "sse2", "sse4_2", "avx", "avx2", "fma",
+        "avx512f", "avx512dq", "avx512bw", "avx512vl")
+        if flag in native_features) or "unavailable"
+    lines.extend([
+        f"- **Host CPU model:** {native_cpu.get('model') or cpu_label}.",
+        f"- **Host OS:** {native_status.get('host_os', 'unavailable')}.",
+        f"- **CPU feature flags:** {cpu_flags}.",
+        f"- **Reported available multiarch profiles:** {', '.join(native_status.get('available_profiles', [])) or 'unavailable'}.",
+        f"- **Requested native ISA:** {native_status.get('requested_native_profile', 'unavailable')}; **selected:** {native_profile or 'none'}.",
+        f"- **Native validation:** {native_status.get('status', 'unavailable')}; eight builds expected, {len(native_ducc)} native timing samples indexed (by profile/case/variant/sample).",
+        f"- **Native compiler:** {native_status.get('compiler', {}).get('version', 'unavailable')}.",
+        "",
+        "Native source configurations retain A–D: pre-inline/no-tweaks, inline/no-tweaks, pre-inline/tweaks, and inline/tweaks. Native IDs `NA0`–`ND0` use LTO OFF; `NA1`–`ND1` use LTO ON. **Neither LTO-ON native build nor its results establish multiarch LTO safety.**",
+        "",
+    ])
+    if native_profile and native_status.get("status") != "skipped":
+        native_build_rows = []
+        for lto in (0, 1):
+            for variant in VARIANT_IDS:
+                label = f"N{variant}{lto}"
+                entry = native_status.get("variants", {}).get(label, {})
+                build = entry.get("build_diagnostics", {})
+                native_build_rows.append([
+                    label, native_profile, "ON" if lto else "OFF",
+                    "ON" if entry.get("inline") else "OFF",
+                    "ON" if entry.get("tweaks") else "OFF",
+                    entry.get("build", "unavailable"),
+                    cell(sum(build.get("build_times", {}).values()), 1)
+                    if build.get("build_times") else "—",
+                    str(build.get("size_bytes", "—")),
+                    entry.get("error", "—")[:300],
+                ])
+        add_case_table(lines, "Native build/flag validation",
+                       ["ID", "Exact ISA", "LTO", "Inline", "Tweaks", "Build", "Build seconds",
+                        "Extension bytes", "Error"], native_build_rows,
+                       "Every successful build verifies -march, IPO compile/link flags, a native Python import, and absence of LTO IR in the final extension.")
+        add_case_table(lines, f"Native absolute execution time: {native_profile}",
+                       ["Case", *native_ids],
+                       [[case["id"], *[absolute_cell(native_ducc, native_profile,
+                                                    case["id"], variant)
+                                       for variant in native_ids]] for case in CASES],
+                       "Milliseconds, median of repeat medians across matched deterministic samples.")
+        add_case_table(lines, "Native LTO effect (OFF time / ON time)",
+                       ["Case", *[f"{v}: N{v}0/N{v}1" for v in VARIANT_IDS]],
+                       [[case["id"], *[
+                           ratio_cell(factor_ratio(native_ducc, native_profile,
+                                                   case["id"], f"N{v}0", f"N{v}1"))
+                           for v in VARIANT_IDS]] for case in CASES],
+                       "Values above 1.0 indicate faster LTO-ON code at the same ISA, inline setting, tweaks setting, and input.")
+        add_case_table(lines, "Native inline and FFT-tweak effects",
+                       ["Case", "Inline no tweaks LTO OFF", "Inline tweaks LTO OFF",
+                        "Tweaks inline ON LTO OFF", "Inline no tweaks LTO ON",
+                        "Inline tweaks LTO ON", "Tweaks inline ON LTO ON"],
+                       [[case["id"], *[
+                           ratio_cell(factor_ratio(native_ducc, native_profile,
+                                                   case["id"], left, right))
+                           for left, right in (
+                               ("NA0","NB0"), ("NC0","ND0"), ("NB0","ND0"),
+                               ("NA1","NB1"), ("NC1","ND1"), ("NB1","ND1"))
+                           ]] for case in CASES],
+                       "OFF configuration time / ON configuration time; above 1.0 favors the latter.")
+        if native_profile in supported:
+            add_case_table(lines, "Native versus matching multiarch ISA",
+                           ["Case", *native_ids],
+                           [[case["id"], *[
+                               ratio_cell(factor_ratio(combined_ducc, native_profile,
+                                                       case["id"], variant[1], variant))
+                               for variant in native_ids]] for case in CASES],
+                           "Multiarch time / native time at the same named ISA, source configuration and input. Above 1.0 favors native. The multiarch extension has global IPO disabled; native LTO-ON differs intentionally.")
+        for reference in DISPLAY_REFERENCES:
+            add_case_table(lines, f"{reference.upper()} / native ({native_profile})",
+                           ["Case", *native_ids],
+                           [[case["id"], *[
+                               ratio_cell(reference_ratio(native_ducc, native_references,
+                                                          native_profile, case["id"],
+                                                          variant, reference))
+                               for variant in native_ids]] for case in CASES],
+                           "Reference time / native DUCC time; above 1.0 means native DUCC is faster. The reference wheel is not ISA-matched.")
+        native_benchmark = native_status.get("benchmark", {})
+        lines.extend([
+            f"Native timing samples: **{native_benchmark.get('completed_samples', 0)} / {native_benchmark.get('expected_samples', 0)}**; correctness failures: {native_benchmark.get('correctness_failures', 'unavailable')}.",
+            "",
+        ])
+        if native_benchmark.get("errors"):
+            lines.append("Native benchmark errors:")
+            for error in native_benchmark["errors"][:50]:
+                lines.append(f"- {str(error)[:400]}")
+            lines.append("")
+        failed_builds = [v for v, item in native_status.get("variants", {}).items()
+                         if item.get("build") != "pass"]
+        if failed_builds:
+            lines.append(f"Native build failures: {', '.join(failed_builds)}.")
+            lines.append("")
+    else:
+        lines.extend([f"Native matrix not executed: {native_status.get('error') or 'native-status.json missing or native ISA unavailable'}.", ""])
+    lines.extend(["Native raw timing and reference records are preserved in `native-timings.jsonl` and `native-references.jsonl`; compiler/link diagnostics in `native-status.json` and `native-build-logs/`.", ""])
+
     lines.extend(["", f"**Primary PNG charts:** {len(charts)} (maximum 9).", ""])
     lines.append("Charts are stored in the downloadable `fft-inline-tweaks-results` Actions artifact; relative artifact paths cannot render as images inside an Actions step summary.")
     repository = os.environ.get("GITHUB_REPOSITORY")
