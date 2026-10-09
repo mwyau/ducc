@@ -60,13 +60,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define DUCC0_NAMESPACE ducc0
 #endif
 
-#if defined(__has_attribute)
-#if __has_attribute(hot)
-#define DUCC0_HOT [[gnu::hot]]
-#else
-#define DUCC0_HOT
-#endif
-#elif defined(__GNUC__)
+// Same GCC/Clang attribute guard used for the other DUCC0 macros.
+#if defined(__GNUC__)
 #define DUCC0_HOT [[gnu::hot]]
 #else
 #define DUCC0_HOT

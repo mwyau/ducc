@@ -23,9 +23,9 @@ jobs:
       - name: Benchmark FFT against FFTW, SciPy and NumPy
         run: |
           mkdir -p fft-bench-results
-          lscpu > fft-bench-results/lscpu.txt
-          c++ --version > fft-bench-results/compiler.txt
-          python -m pip freeze > fft-bench-results/packages.txt
+          lscpu | tee fft-bench-results/lscpu.txt
+          c++ --version | tee fft-bench-results/compiler.txt
+          python -m pip freeze | tee fft-bench-results/packages.txt
           python python/demos/fft_bench.py --output-dir fft-bench-results --samples 4 --repeats 5
       - name: Upload charts and raw measurements
         uses: actions/upload-artifact@v7

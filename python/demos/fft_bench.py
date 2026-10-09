@@ -21,13 +21,11 @@ import argparse
 import csv
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
-import importlib.metadata
-
+from pathlib import Path
 import matplotlib
-matplotlib.use("Agg")
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 
@@ -135,167 +133,118 @@ def measure_mkl_fft_inplace(a, nrepeat, nthr):
     return times, c
 
 
-# Keep the original measurement helpers; collect paired timings rather than
-# drawing a histogram for each independent group.
-def bench_nd(ndim, nmax, nthr, ntry, tp, funcs, nrepeat, rows, profile,
-             nice_sizes=True):
-    print("{}D, type {}, max extent is {}:".format(ndim, tp, nmax))
-    names = ("DUCC", "FFTW", "SciPy", "NumPy")
-    for n in range(ntry):
-        shp = rng.integers(nmax//3, nmax+1, ndim)
-        if nice_sizes:
-            shp = np.array([ducc0.fft.good_size(sz) for sz in shp])
-        print("  {0:4d}/{1}: shape={2} ...".format(n, ntry, shp),
-              end=" ", flush=True)
-        a = (rng.random(shp)-0.5 + 1j*(rng.random(shp)-0.5)).astype(tp)
-        timings = []
-        output = []
-        for func in funcs:
-            result = func(a, nrepeat, nthr)
-            timings.append(float(np.median(result[0])))
-            output.append(result[1])
-
-        for idx, name in enumerate(names):
-            error = float(ducc0.misc.l2error(output[0], output[idx]))
-            tolerance = 2e-5 if tp == "c8" else 1e-11
-            if not np.isfinite(error) or error > tolerance:
-                raise RuntimeError(
-                    f"{profile} {tp} {ndim}D shape={tuple(shp)} "
-                    f"{name} L2 error={error:g} > {tolerance:g}")
-            rows.append({
-                "profile": profile, "dtype": tp, "ndim": ndim,
-                "shape": "x".join(map(str, shp)),
-                "elements": int(np.prod(shp)), "sample": n,
-                "backend": name, "median_s": timings[idx],
-                "speedup": timings[idx] / timings[0],
-                "result_dtype": str(output[idx].dtype),
-                "l2_error": error,
-            })
-        print("FFTW/DUCC={:.3f} SciPy/DUCC={:.3f} NumPy/DUCC={:.3f}"
-              .format(*(value/timings[0] for value in timings[1:])))
+# The original benchmark shapes and measurement helpers are retained.
+def bench_nd(ndim, nmax, ntry, tp, funcs, nrepeat, profile, rows):
+    for sample in range(ntry):
+        shape = tuple(ducc0.fft.good_size(int(n)) for n in
+                      rng.integers(nmax//3, nmax+1, ndim))
+        a = (rng.random(shape)-0.5 + 1j*(rng.random(shape)-0.5)).astype(tp)
+        measurements = [func(a, nrepeat, 1) for func in funcs]
+        output = measurements[0][1]
+        for backend, (_, result) in zip(("ducc", "fftw", "scipy", "numpy"), measurements):
+            error = ducc0.misc.l2error(output, result)
+            tol = 2e-5 if tp == "c8" else 1e-11
+            if not np.isfinite(error) or error > tol:
+                raise RuntimeError(f"{profile} {backend} {tp} {shape}: L2 error {error:g}")
+        medians = [float(np.median(timings)) for timings, _ in measurements]
+        rows.append(dict(profile=profile, dtype=tp, ndim=ndim, sample=sample,
+                         shape="x".join(map(str, shape)),
+                         elements=int(np.prod(shape)), **dict(zip(
+                             ("ducc", "fftw", "scipy", "numpy"), medians))))
+        print(f"{profile} {tp} {ndim}D {shape}: "
+              f"FFTW={medians[1]/medians[0]:.2f} "
+              f"SciPy={medians[2]/medians[0]:.2f} "
+              f"NumPy={medians[3]/medians[0]:.2f}", flush=True)
 
 
-def benchmark_profile(profile, output_dir, ntry, nrepeat):
-    # Reset the seed in every process so all ISA profiles see identical shapes.
-    global rng
-    rng = np.random.default_rng(42)
-    f1 = lambda a, r, t: measure_duccfft(a, r, t, inplace=False,
-                                         noncritical=True)
-    f2 = lambda a, r, t: measure_fftw(a, r, t, flags=('FFTW_MEASURE',),
-                                     timelimit=2)
-    funcs = (f1, f2, measure_scipy_fft, measure_numpy_fft)
+def benchmark(output, profile, ntry, nrepeat):
+    funcs = (
+        lambda a, n, t: measure_duccfft(a, n, t, inplace=False, noncritical=True),
+        lambda a, n, t: measure_fftw(a, n, t, timelimit=2),
+        measure_scipy_fft, measure_numpy_fft,
+    )
     rows = []
     for tp in ("c16", "c8"):
-        for ndim, limit in enumerate((8192, 2048, 256), start=1):
-            bench_nd(ndim, limit, 1, ntry, tp, funcs, nrepeat, rows, profile)
-    with (output_dir / f"measurements_{profile}.csv").open(
-            "w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file, fieldnames=rows[0].keys())
+        for ndim, limit in enumerate((8192, 2048, 256), 1):
+            bench_nd(ndim, limit, ntry, tp, funcs, nrepeat, profile, rows)
+    with (output / f"{profile}.csv").open("w", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=rows[0])
         writer.writeheader()
         writer.writerows(rows)
 
 
-def make_plots(rows, profiles, output_dir):
-    for backend in ("FFTW", "SciPy", "NumPy"):
+def plot(output, profiles):
+    rows = []
+    for profile in profiles:
+        with (output / f"{profile}.csv").open(newline="") as file:
+            rows.extend(csv.DictReader(file))
+    for backend in ("fftw", "scipy", "numpy"):
         fig, axes = plt.subplots(2, 3, figsize=(13, 7))
-        for r, tp in enumerate(("c16", "c8")):
-            for c, ndim in enumerate((1, 2, 3)):
-                ax = axes[r, c]
+        for i, tp in enumerate(("c16", "c8")):
+            for j, ndim in enumerate((1, 2, 3)):
+                ax = axes[i, j]
                 for profile in profiles:
-                    points = sorted(
-                        (x["elements"], x["speedup"])
-                        for x in rows if x["profile"] == profile
-                        and x["dtype"] == tp and x["ndim"] == ndim
-                        and x["backend"] == backend)
+                    points = sorted((int(r["elements"]), float(r[backend])/float(r["ducc"]))
+                                    for r in rows if r["profile"] == profile
+                                    and r["dtype"] == tp and int(r["ndim"]) == ndim)
                     if points:
-                        ax.plot(*zip(*points), marker="o", linewidth=1.2,
-                                label=profile)
-                ax.axhline(1, color="gray", linestyle="--", linewidth=0.8)
+                        ax.plot(*zip(*points), "-o", label=profile)
+                ax.axhline(1, color="gray", linestyle="--")
                 ax.set_xscale("log")
-                ax.grid(alpha=0.2)
                 ax.set_title(f"{tp}, {ndim}D")
-                ax.set_xlabel("FFT input elements")
-                if c == 0:
-                    ax.set_ylabel("Reference time / DUCC time")
-        handles, labels = axes[0, 0].get_legend_handles_labels()
-        if handles:
-            fig.legend(handles, labels, loc="upper center",
-                       bbox_to_anchor=(0.5, 0.95), ncol=len(handles))
-        fig.suptitle(f"DUCC versus {backend} (above 1 = DUCC faster)")
-        note = ("DUCC and FFTW: preallocated out-of-place; "
-                "SciPy/NumPy: allocating API. Reference wheels not ISA-matched.")
-        fig.text(0.5, 0.02, note, ha="center", fontsize=8)
-        fig.tight_layout(rect=(0, 0.05, 1, 0.88))
-        fig.savefig(output_dir / f"ducc_vs_{backend.lower()}.png", dpi=140)
+                ax.set_xlabel("Input elements")
+                if j == 0:
+                    ax.set_ylabel("Reference / DUCC time")
+        fig.legend(*axes[0, 0].get_legend_handles_labels(), loc="upper center",
+                   bbox_to_anchor=(0.5, 0.95), ncol=len(profiles))
+        fig.suptitle(f"DUCC vs {backend.upper()} (above 1 favors DUCC)")
+        fig.text(0.5, 0.01, "DUCC/FFTW out-of-place, preallocated; SciPy/NumPy allocate. "
+                 "Reference ISAs not forced.", ha="center", fontsize=8)
+        fig.tight_layout(rect=(0, 0.04, 1, 0.88))
+        fig.savefig(output / f"ducc_vs_{backend}.png", dpi=140)
         plt.close(fig)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="DUCC FFT comparison")
+    parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", default="fft-bench-results")
     parser.add_argument("--samples", type=int, default=10)
     parser.add_argument("--repeats", type=int, default=10)
-    parser.add_argument("--profile", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--profile", type=int, choices=(1, 3, 4), help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.samples < 1 or args.repeats < 1:
         parser.error("samples and repeats must be positive")
-    output_dir = Path(args.output_dir).resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    cpu = ducc0.misc.cpu_info()
-    if args.profile is not None:
-        if not cpu.get("multiarch") or cpu.get("active_profile") != args.profile:
-            raise RuntimeError(f"requested {args.profile}, detected {cpu}")
-        benchmark_profile(args.profile, output_dir, args.samples, args.repeats)
+    output = Path(args.output_dir).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    info = ducc0.misc.cpu_info()
+    names = {1: "x86-64", 3: "x86-64-v3", 4: "x86-64-v4"}
+    if args.profile:
+        profile = names[args.profile]
+        if not info.get("multiarch") or info.get("active_profile") != profile:
+            raise RuntimeError(f"requested {profile}, got {info}")
+        benchmark(output, profile, args.samples, args.repeats)
         return
 
-    profiles = (cpu["available_profiles"] if cpu.get("multiarch")
-                else ["installed"])
-    if cpu.get("multiarch"):
-        levels = {"x86-64": "1", "x86-64-v3": "3", "x86-64-v4": "4"}
-        for profile in profiles:
+    profiles = info["available_profiles"] if info.get("multiarch") else ["installed"]
+    if info.get("multiarch"):
+        for level, profile in names.items():
+            if profile not in profiles:
+                print(f"SKIP {profile}: unsupported CPU", flush=True)
+                continue
             env = os.environ.copy()
-            env["DUCC0_MAX_PSABI_LEVEL"] = levels[profile]
-            subprocess.run([
-                sys.executable, __file__, "--output-dir", str(output_dir),
-                "--samples", str(args.samples), "--repeats", str(args.repeats),
-                "--profile", profile,
-            ], env=env, check=True)
+            env["DUCC0_MAX_PSABI_LEVEL"] = str(level)
+            subprocess.run([sys.executable, __file__, "--output-dir", str(output),
+                            "--samples", str(args.samples), "--repeats", str(args.repeats),
+                            "--profile", str(level)], env=env, check=True)
     else:
-        benchmark_profile("installed", output_dir, args.samples, args.repeats)
-
-    rows = []
-    for profile in profiles:
-        with (output_dir / f"measurements_{profile}.csv").open(
-                newline="", encoding="utf-8") as file:
-            reader = csv.DictReader(file)
-            for row in reader:
-                row["elements"] = int(row["elements"])
-                row["ndim"] = int(row["ndim"])
-                row["speedup"] = float(row["speedup"])
-                rows.append(row)
-    make_plots(rows, profiles, output_dir)
-    versions = {}
-    for package in ("ducc0", "numpy", "scipy", "pyFFTW", "matplotlib"):
-        try:
-            versions[package] = importlib.metadata.version(package)
-        except importlib.metadata.PackageNotFoundError:
-            versions[package] = "unavailable"
-    (output_dir / "metadata.json").write_text(json.dumps({
-        "cpu_info": cpu, "profiles_tested": profiles,
-        "profiles_skipped": [p for p in ("x86-64", "x86-64-v3", "x86-64-v4")
-                             if cpu.get("multiarch") and p not in profiles],
-        "versions": versions, "seed": 42, "samples": args.samples,
-        "repeats": args.repeats, "threads": 1,
-        "transform": "forward complex c2c over all axes",
-        "allocation": {
-            "DUCC": "preallocated out-of-place",
-            "FFTW": "preallocated out-of-place",
-            "SciPy": "allocating API", "NumPy": "allocating API",
-        }, "ratio": "reference median / DUCC median; >1 favors DUCC",
-        "reference_isa": "not matched to the forced DUCC profile",
-    }, indent=2) + "\n", encoding="utf-8")
-    print("Profiles tested:", ", ".join(profiles))
-    print("Saved 3 figures, CSV files and metadata in", output_dir)
+        benchmark(output, "installed", args.samples, args.repeats)
+    plot(output, profiles)
+    (output / "metadata.json").write_text(json.dumps(dict(
+        cpu_info=info, profiles=profiles, seed=42,
+        samples=args.samples, repeats=args.repeats, threads=1,
+        ratio="reference time / DUCC time; >1 favors DUCC",
+    ), indent=2) + "\n")
+    print("Charts and measurements saved to", output)
 
 
 if __name__ == "__main__":
