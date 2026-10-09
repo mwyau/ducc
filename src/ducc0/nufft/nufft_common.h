@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include "ducc0/infra/useful_macros.h"
 #include "ducc0/infra/simd.h"
 #include "ducc0/math/gridding_kernel.h"
 #include "ducc0/fft/fft.h"
@@ -68,7 +69,7 @@ template<typename T> void quickzero(const vmav<T,2> &arr, size_t nthreads)
 #endif
   }
 
-[[gnu::hot]] DUCC0_ALWAYS_INLINE
+DUCC0_HOT DUCC0_ALWAYS_INLINE
 auto comp_indices(size_t idx, size_t nuni, size_t nbig, bool fft_order)
   {
   int icf = abs(int(nuni/2)-int(idx));

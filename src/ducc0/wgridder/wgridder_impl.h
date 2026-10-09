@@ -90,7 +90,7 @@ template<typename T> void quickzero(const vmav<T,2> &arr, size_t nthreads)
 #endif
   }
 
-template<typename T, typename F> [[gnu::hot]] void expi(vector<complex<T>> &res, vector<T> &buf, F getang)
+template<typename T, typename F> DUCC0_HOT void expi(vector<complex<T>> &res, vector<T> &buf, F getang)
   {
   using Tsimd = native_simd<T>;
   static constexpr auto vlen = Tsimd::size();
@@ -1027,7 +1027,7 @@ timers.pop();
 
         constexpr int lineJump() const { return svvec; }
 
-        [[gnu::hot]] DUCC0_ALWAYS_INLINE void prep(const UVW &in,
+        DUCC0_HOT DUCC0_ALWAYS_INLINE void prep(const UVW &in,
           [[maybe_unused]] size_t nth=0)
           {
           double ufrac, vfrac;
@@ -1118,7 +1118,7 @@ timers.pop();
 
         constexpr int lineJump() const { return svvec; }
 
-        [[gnu::hot]] DUCC0_ALWAYS_INLINE void prep(const UVW &in,
+        DUCC0_HOT DUCC0_ALWAYS_INLINE void prep(const UVW &in,
           [[maybe_unused]] size_t nth=0)
           {
           double ufrac, vfrac;
@@ -1160,7 +1160,7 @@ timers.pop();
                       });
       }
 
-    template<size_t SUPP, bool wgrid> [[gnu::hot]] void x2grid_c_helper
+    template<size_t SUPP, bool wgrid> DUCC0_HOT void x2grid_c_helper
       (size_t supp, const vmav<complex<Tcalc>,2> &grid, size_t p0, double w0)
       {
       if constexpr (SUPP>=8)
@@ -1265,7 +1265,7 @@ timers.pop();
       x2grid_c_helper<maxsupp, wgrid>(supp, grid, p0, w0);
       }
 
-    template<size_t SUPP, bool wgrid> [[gnu::hot]] void grid2x_c_helper
+    template<size_t SUPP, bool wgrid> DUCC0_HOT void grid2x_c_helper
       (size_t supp, const cmav<complex<Tcalc>,2> &grid, size_t p0, double w0)
       {
       if constexpr (SUPP>=8)

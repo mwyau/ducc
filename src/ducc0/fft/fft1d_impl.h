@@ -835,7 +835,7 @@ template <typename Tfs> class cfftp11: public cfftpass<Tfs>
     auto WA(size_t x, size_t i) const
       { return wa[x+(i-1)*(ip-1)]; }
 
-    template<bool fwd, typename Tcd> [[gnu::hot]] Tcd *exec_
+    template<bool fwd, typename Tcd> DUCC0_HOT Tcd *exec_
       (const Tcd * DUCC0_RESTRICT cc, Tcd * DUCC0_RESTRICT ch, Tcd * /*buf*/,
       size_t /*nthreads*/) const
       {

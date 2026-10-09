@@ -16,7 +16,16 @@
 
 import numpy as np
 import ducc0
-from time import time
+from time import perf_counter as time
+import argparse
+import csv
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 
@@ -124,46 +133,119 @@ def measure_mkl_fft_inplace(a, nrepeat, nthr):
     return times, c
 
 
-def bench_nd(ndim, nmax, nthr, ntry, tp, funcs, nrepeat, ttl="", filename="",
-             nice_sizes=True):
-    print("{}D, type {}, max extent is {}:".format(ndim, tp, nmax))
-    results = [[] for i in range(len(funcs))]
-    for n in range(ntry):
-        shp = rng.integers(nmax//3, nmax+1, ndim)
-        if nice_sizes:
-            shp = np.array([ducc0.fft.good_size(sz) for sz in shp])
-        print("  {0:4d}/{1}: shape={2} ...".format(n, ntry, shp), end=" ", flush=True)
-        a = (rng.random(shp)-0.5 + 1j*(rng.random(shp)-0.5)).astype(tp)
-        output = []
-        for func, res in zip(funcs, results):
-            tmp = func(a, nrepeat, nthr)
-            res.append(np.average(tmp[0]))
-            output.append(tmp[1])
-            #sleep(1)  # to wait for potential busy-waiting threads
-        print("{0:5.2e}/{1:5.2e} = {2:5.2f}  L2 error={3}".format(results[0][n], results[1][n], results[0][n]/results[1][n], ducc0.misc.l2error(output[0], output[1])))
-    results = np.array(results)
-    plt.title("{}: {}D, {}, max_extent={}".format(
-        ttl, ndim, str(tp), nmax))
-    plt.xlabel("time ratio")
-    plt.ylabel("counts")
-    plt.hist(results[0, :]/results[1, :], bins="auto")
-    if filename != "":
-        plt.savefig(filename)
-    plt.show()
-    plt.close()
+# The original benchmark shapes and measurement helpers are retained.
+def bench_nd(ndim, nmax, ntry, tp, funcs, nrepeat, profile, rows):
+    for sample in range(ntry):
+        shape = tuple(ducc0.fft.good_size(int(n)) for n in
+                      rng.integers(nmax//3, nmax+1, ndim))
+        a = (rng.random(shape)-0.5 + 1j*(rng.random(shape)-0.5)).astype(tp)
+        measurements = [func(a, nrepeat, 1) for func in funcs]
+        output = measurements[0][1]
+        for backend, (_, result) in zip(("ducc", "fftw", "scipy", "numpy"), measurements):
+            error = ducc0.misc.l2error(output, result)
+            tol = 2e-5 if tp == "c8" else 1e-11
+            if not np.isfinite(error) or error > tol:
+                raise RuntimeError(f"{profile} {backend} {tp} {shape}: L2 error {error:g}")
+        medians = [float(np.median(timings)) for timings, _ in measurements]
+        rows.append(dict(profile=profile, dtype=tp, ndim=ndim, sample=sample,
+                         shape="x".join(map(str, shape)),
+                         elements=int(np.prod(shape)), **dict(zip(
+                             ("ducc", "fftw", "scipy", "numpy"), medians))))
+        print(f"{profile} {tp} {ndim}D {shape}: "
+              f"FFTW={medians[1]/medians[0]:.2f} "
+              f"SciPy={medians[2]/medians[0]:.2f} "
+              f"NumPy={medians[3]/medians[0]:.2f}", flush=True)
 
-f1 = lambda a, nrepeat, nthr: measure_duccfft(a, nrepeat, nthr, inplace=True, noncritical=True)
-f2 = lambda a, nrepeat, nthr: measure_fftw(a, nrepeat, nthr, flags=('FFTW_MEASURE',), timelimit=20)
-funcs = (f1, f2)
-ttl = "duccfft/FFTW"
-ntry = 10
-nthr = 1
-nice_sizes = True
-limits = [8192, 2048, 256]
-#limits = [524288, 8192, 512]
-bench_nd(1, limits[0], nthr, ntry, "c16", funcs, 10, ttl, "1d.png", nice_sizes)
-bench_nd(2, limits[1], nthr, ntry, "c16", funcs, 10, ttl, "2d.png", nice_sizes)
-bench_nd(3, limits[2], nthr, ntry, "c16", funcs, 10, ttl, "3d.png", nice_sizes)
-bench_nd(1, limits[0], nthr, ntry, "c8", funcs, 10, ttl, "1d_single.png", nice_sizes)
-bench_nd(2, limits[1], nthr, ntry, "c8", funcs, 10, ttl, "2d_single.png", nice_sizes)
-bench_nd(3, limits[2], nthr, ntry, "c8", funcs, 10, ttl, "3d_single.png", nice_sizes)
+
+def benchmark(output, profile, ntry, nrepeat):
+    funcs = (
+        lambda a, n, t: measure_duccfft(a, n, t, inplace=False, noncritical=True),
+        lambda a, n, t: measure_fftw(a, n, t, timelimit=2),
+        measure_scipy_fft, measure_numpy_fft,
+    )
+    rows = []
+    for tp in ("c16", "c8"):
+        for ndim, limit in enumerate((8192, 2048, 256), 1):
+            bench_nd(ndim, limit, ntry, tp, funcs, nrepeat, profile, rows)
+    with (output / f"{profile}.csv").open("w", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=rows[0])
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def plot(output, profiles):
+    rows = []
+    for profile in profiles:
+        with (output / f"{profile}.csv").open(newline="") as file:
+            rows.extend(csv.DictReader(file))
+    for backend in ("fftw", "scipy", "numpy"):
+        fig, axes = plt.subplots(2, 3, figsize=(13, 7))
+        for i, tp in enumerate(("c16", "c8")):
+            for j, ndim in enumerate((1, 2, 3)):
+                ax = axes[i, j]
+                for profile in profiles:
+                    points = sorted((int(r["elements"]), float(r[backend])/float(r["ducc"]))
+                                    for r in rows if r["profile"] == profile
+                                    and r["dtype"] == tp and int(r["ndim"]) == ndim)
+                    if points:
+                        ax.plot(*zip(*points), "-o", label=profile)
+                ax.axhline(1, color="gray", linestyle="--")
+                ax.set_xscale("log")
+                ax.set_title(f"{tp}, {ndim}D")
+                ax.set_xlabel("Input elements")
+                if j == 0:
+                    ax.set_ylabel("Reference / DUCC time")
+        fig.legend(*axes[0, 0].get_legend_handles_labels(), loc="upper center",
+                   bbox_to_anchor=(0.5, 0.95), ncol=len(profiles))
+        fig.suptitle(f"DUCC vs {backend.upper()} (above 1 favors DUCC)")
+        fig.text(0.5, 0.01, "DUCC/FFTW out-of-place, preallocated; SciPy/NumPy allocate. "
+                 "Reference ISAs not forced.", ha="center", fontsize=8)
+        fig.tight_layout(rect=(0, 0.04, 1, 0.88))
+        fig.savefig(output / f"ducc_vs_{backend}.png", dpi=140)
+        plt.close(fig)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output-dir", default="fft-bench-results")
+    parser.add_argument("--samples", type=int, default=10)
+    parser.add_argument("--repeats", type=int, default=10)
+    parser.add_argument("--profile", type=int, choices=(1, 3, 4), help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    if args.samples < 1 or args.repeats < 1:
+        parser.error("samples and repeats must be positive")
+    output = Path(args.output_dir).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    info = ducc0.misc.cpu_info()
+    names = {1: "x86-64", 3: "x86-64-v3", 4: "x86-64-v4"}
+    if args.profile:
+        profile = names[args.profile]
+        if not info.get("multiarch") or info.get("active_profile") != profile:
+            raise RuntimeError(f"requested {profile}, got {info}")
+        benchmark(output, profile, args.samples, args.repeats)
+        return
+
+    profiles = info["available_profiles"] if info.get("multiarch") else ["installed"]
+    if info.get("multiarch"):
+        for level, profile in names.items():
+            if profile not in profiles:
+                print(f"SKIP {profile}: unsupported CPU", flush=True)
+                continue
+            env = os.environ.copy()
+            env["DUCC0_MAX_PSABI_LEVEL"] = str(level)
+            subprocess.run([sys.executable, __file__, "--output-dir", str(output),
+                            "--samples", str(args.samples), "--repeats", str(args.repeats),
+                            "--profile", str(level)], env=env, check=True)
+    else:
+        benchmark(output, "installed", args.samples, args.repeats)
+    plot(output, profiles)
+    (output / "metadata.json").write_text(json.dumps(dict(
+        cpu_info=info, profiles=profiles, seed=42,
+        samples=args.samples, repeats=args.repeats, threads=1,
+        ratio="reference time / DUCC time; >1 favors DUCC",
+    ), indent=2) + "\n")
+    print("Charts and measurements saved to", output)
+
+
+if __name__ == "__main__":
+    main()

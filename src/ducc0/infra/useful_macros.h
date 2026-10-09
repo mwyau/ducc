@@ -60,6 +60,13 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define DUCC0_NAMESPACE ducc0
 #endif
 
+// Same GCC/Clang attribute guard used for the other DUCC0 macros.
+#if defined(__GNUC__)
+#define DUCC0_HOT [[gnu::hot]]
+#else
+#define DUCC0_HOT
+#endif
+
 #if defined(__GNUC__)
 #define DUCC0_NOINLINE [[gnu::noinline]]
 #define DUCC0_ALWAYS_INLINE [[gnu::always_inline]] inline
