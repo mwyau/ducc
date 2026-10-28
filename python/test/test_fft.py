@@ -38,7 +38,7 @@ def test_c2c_unaligned_singleton_strides():
 
 
 def test_r2c_rejects_zero_length_transform_axis():
-    with pytest.raises(RuntimeError, match="arrays must be at least 1D and not have zero size"):
+    with pytest.raises(RuntimeError, match="no zero-sized FFTs"):
         ducc0.fft.r2c(np.empty((0,), dtype=np.float64))
 
 
@@ -48,8 +48,62 @@ def test_r2c_rejects_zero_length_transform_axis():
     (ducc0.fft.c2r, np.array(2.+0.j)),
 ])
 def test_fft_rejects_scalar_arrays_without_axes(func, inp):
-    with pytest.raises(RuntimeError, match="arrays must be at least 1D and not have zero size"):
-		      func(inp)
+    with pytest.raises(RuntimeError,
+                       match=r"arrays must be at least 1D(?! and not have zero size)"):
+        func(inp)
+
+
+@pmp("shape, axes, dtype", [
+    ((0, 8), (1,), np.complex64),
+    ((8, 0), (0,), np.complex128),
+    ((0, 4, 8), (1, 2), np.complex128),
+    ((4, 0, 8), (0, 2), np.complex64),
+])
+def test_c2c_allows_empty_batches(shape, axes, dtype):
+    inp = np.empty(shape, dtype=dtype)
+    for forward in (True, False):
+        out = fft.c2c(inp, axes=axes, forward=forward)
+        assert out.shape == shape
+        assert out.dtype == dtype
+
+
+@pmp("shape, axes, dtype, spectrum_shape, lastsize", [
+    ((0, 8), (1,), np.float32, (0, 5), 8),
+    ((0, 4, 8), (1, 2), np.float64, (0, 4, 5), 8),
+    ((4, 0, 8), (0, 2), np.float64, (4, 0, 5), 8),
+])
+def test_real_ffts_allow_empty_batches(shape, axes, dtype, spectrum_shape,
+                                       lastsize):
+    inp = np.empty(shape, dtype=dtype)
+    spectrum = fft.r2c(inp, axes=axes)
+    assert spectrum.shape == spectrum_shape
+    assert spectrum.dtype == ctype[dtype]
+
+    out = fft.c2r(spectrum, axes=axes, lastsize=lastsize, forward=False)
+    assert out.shape == shape
+    assert out.dtype == dtype
+
+
+def test_dct_dst_allow_empty_batches():
+    inp = np.empty((0, 8), dtype=np.float32)
+    for transform in (fft.dct, fft.dst):
+        out = transform(inp, type=2, axes=(1,))
+        assert out.shape == inp.shape
+        assert out.dtype == inp.dtype
+
+
+@pmp("func, shape, axes, dtype, kwargs", [
+    (fft.c2c, (8, 0), (1,), np.complex64, {}),
+    (fft.c2c, (4, 0, 8), (1, 2), np.complex128, {}),
+    (fft.c2c, (4, 8, 0), (1, 2), np.complex128, {}),
+    (fft.r2c, (4, 0, 8), (1, 2), np.float64, {}),
+    (fft.c2r, (4, 0, 5), (1, 2), np.complex128,
+     {"lastsize": 8, "forward": False}),
+])
+def test_fft_rejects_zero_length_transform_axes(func, shape, axes, dtype,
+                                                kwargs):
+    with pytest.raises(RuntimeError, match="no zero-sized FFTs"):
+        func(np.empty(shape, dtype=dtype), axes=axes, **kwargs)
 
 
 shapes1D = ((10,), (127,))
