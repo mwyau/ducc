@@ -1,6 +1,9 @@
 name: ducc-vendoring-tests
 
 on:
+  push:
+    branches:
+      - fix/fft-empty-batches
   workflow_dispatch:
     inputs:
       suite:
@@ -90,13 +93,13 @@ jobs:
           spin python --no-build -- -c 'import pathlib, scipy; path = pathlib.Path(scipy.__file__).resolve(); print(path); assert path.is_relative_to(pathlib.Path.cwd().resolve())'
 
       - name: Test FFT APIs
-        if: inputs.suite == 'fft'
+        if: github.event_name == 'workflow_dispatch' && inputs.suite == 'fft'
         working-directory: scipy
         run: |
           spin test scipy/fft
           spin test scipy/fftpack
 
       - name: Test full SciPy suite
-        if: inputs.suite == 'full'
+        if: github.event_name == 'push' || inputs.suite == 'full'
         working-directory: scipy
         run: spin test -m full
