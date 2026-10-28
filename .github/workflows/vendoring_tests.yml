@@ -1,0 +1,102 @@
+name: ducc-vendoring-tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: SciPy tests
+        required: true
+        type: choice
+        default: fft
+        options:
+          - fft
+          - full
+
+permissions:
+  contents: read
+
+jobs:
+  scipy:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out DUCC
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          path: ducc
+          persist-credentials: false
+
+      - name: Check out SciPy main
+        uses: actions/checkout@v7
+        with:
+          repository: scipy/scipy
+          ref: main
+          path: scipy
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Record source revisions
+        run: |
+          DUCC_SHA="$(git -C ducc rev-parse HEAD)"
+          SCIPY_SHA="$(git -C scipy rev-parse HEAD)"
+          printf 'DUCC source: %s\nSciPy source: %s\n' "$DUCC_SHA" "$SCIPY_SHA"
+          echo "DUCC_SHA=$DUCC_SHA" >> "$GITHUB_ENV"
+          git -C ducc update-ref refs/heads/vendoring-source "$DUCC_SHA"
+          cp scipy/subprojects/duccfft/ducc0/fft/fftnd_impl.h "$RUNNER_TEMP/scipy-fftnd_impl.h"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev libatlas-base-dev liblapack-dev libgmp-dev libmpfr-dev libsuitesparse-dev
+
+      - name: Install SciPy dependencies
+        working-directory: scipy
+        run: python -m pip install --group build --group dev-cli --group test-core --group test-mp --group optional-runtime-deps
+
+      - name: Vendor selected DUCC source
+        working-directory: scipy
+        run: |
+          set -euo pipefail
+          script=tools/vendoring/vendor_duccfft.sh
+          grep -Fqx 'REPO_URL="https://gitlab.mpcdf.mpg.de/mtr/ducc.git"' "$script" || { echo 'Unexpected SciPy vendor script REPO_URL assignment' >&2; exit 1; }
+          grep -Fqx 'COMMIT_HASH="64f42ba531f609ba7029c82207a063b17f9d5275"' "$script" || { echo 'Unexpected SciPy vendor script COMMIT_HASH assignment' >&2; exit 1; }
+          [[ -x "$script" ]] || { echo 'SciPy vendoring script is missing or not executable' >&2; exit 1; }
+          sed -i \
+            -e "s|^REPO_URL=\"https://gitlab.mpcdf.mpg.de/mtr/ducc.git\"$|REPO_URL=\"$GITHUB_WORKSPACE/ducc\"|" \
+            -e "s|^COMMIT_HASH=\"64f42ba531f609ba7029c82207a063b17f9d5275\"$|COMMIT_HASH=\"$DUCC_SHA\"|" \
+            "$script"
+          ./tools/vendoring/vendor_duccfft.sh
+          test -f subprojects/duccfft/ducc0/fft/fft.h || { echo 'Vendored FFT header is missing' >&2; exit 1; }
+          test -f subprojects/duccfft/ducc0/fft/fftnd_impl.h || { echo 'Vendored FFT implementation is missing' >&2; exit 1; }
+          if cmp -s "$RUNNER_TEMP/scipy-fftnd_impl.h" subprojects/duccfft/ducc0/fft/fftnd_impl.h; then
+            echo 'Vendored FFT source matches SciPy main snapshot' >&2
+            exit 1
+          else
+            cmp_status=$?
+            [[ $cmp_status -eq 1 ]] || { echo 'Could not compare vendored FFT source with SciPy main snapshot' >&2; exit "$cmp_status"; }
+          fi
+          echo 'Vendored FFT source differs from SciPy main snapshot'
+          printf 'Vendored DUCC source: %s\n' "$DUCC_SHA"
+
+      - name: Build and verify SciPy
+        working-directory: scipy
+        run: |
+          spin build --release
+          spin python --no-build -- -c 'import pathlib, scipy; path = pathlib.Path(scipy.__file__).resolve(); print(path); assert path.is_relative_to(pathlib.Path.cwd().resolve())'
+
+      - name: Test FFT APIs
+        if: inputs.suite == 'fft'
+        working-directory: scipy
+        run: |
+          spin test scipy/fft
+          spin test scipy/fftpack
+
+      - name: Test full SciPy suite
+        if: inputs.suite == 'full'
+        working-directory: scipy
+        run: spin test -m full
