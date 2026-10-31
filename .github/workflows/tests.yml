@@ -1,9 +1,7 @@
 name: DUCC FFT combined policy 1D ND long multiarch
 
 on:
-  push:
-    branches:
-      - test/fft-policy-combined-20261031
+  # Manual dispatch prevents duplicate 48-job sweeps during implementation.
   workflow_dispatch:
     inputs:
       samples:
@@ -21,7 +19,7 @@ permissions:
 
 jobs:
   benchmark:
-    name: multiarch FFT candidate ${{ matrix.slot }}
+    name: FFT ${{ matrix.suite }} candidate ${{ matrix.slot }}
     runs-on: ubuntu-26.04
     timeout-minutes: 360
     continue-on-error: true
@@ -29,6 +27,7 @@ jobs:
       fail-fast: false
       max-parallel: 16
       matrix:
+        suite: [1d, nd, long]
         slot: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
       - name: Checkout dispatch branch and reachable pinned implementations
@@ -73,12 +72,14 @@ jobs:
           python .github/scripts/fft_policy_runner.py \
             --output "$RUNNER_TEMP/fft-policy-runner" \
             --samples "${{ inputs.samples || 9 }}" \
-            --sample-ms "${{ inputs.sample_ms || 2 }}"
+            --sample-ms "${{ inputs.sample_ms || 2 }}" \
+            --suite "${{ matrix.suite }}" \
+            --soft-limit-seconds 19800
       - name: Collect all successful profiles and failure diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fft-policy-runner-${{ matrix.slot }}
+          name: fft-policy-runner-${{ matrix.suite }}-${{ matrix.slot }}
           path: |
             ${{ runner.temp }}/fft-policy-runner/status.json
             ${{ runner.temp }}/fft-policy-runner/runner_benchmarks/
@@ -107,7 +108,7 @@ jobs:
       - name: Analyze paired speedups and regression counts
         run: |
           mkdir -p results
-          python .github/scripts/fft_policy_group.py results --output grouped --planned 16
+          python .github/scripts/fft_policy_group.py results --output grouped --planned 48
       - name: Publish inspectable findings
         if: always()
         run: |
