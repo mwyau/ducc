@@ -1,0 +1,277 @@
+{
+  "schema": 1,
+  "description": "CPU-paired FFT scheduler L2 x strided width x tail factorial with pinned source refs",
+  "factorial": {
+    "l2_kib": [
+      1024,
+      1280,
+      2048,
+      2560
+    ],
+    "strided_cap8": [
+      0,
+      1
+    ],
+    "greedy_tail": [
+      0,
+      1
+    ],
+    "optimized_radix": true
+  },
+  "aliases": {
+    "E": "G-1024k-S0-T1",
+    "G": "G-1024k-S1-T1"
+  },
+  "diagnostic": [
+    "F8",
+    "F16"
+  ],
+  "auto_l2": "G-DETECT",
+  "profiles": [
+    {
+      "label": "BASE",
+      "branch": "ducc0",
+      "sha": "757145c328d4680fc23bf37e372860fa49c4d8b5"
+    },
+    {
+      "label": "G-1024k-S0-T0",
+      "branch": "exp/fft-policy-l1024-s0-t0",
+      "sha": "ee0ddb5547cc08c234d4b0242b126e475f4e755d",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 1024,
+        "DUCC0_FFT_STRIDED_CAP8": 0,
+        "DUCC0_FFT_GREEDY_TAIL": 0,
+        "DUCC0_FFT_CONTIG_CAP8": 1,
+        "DUCC0_FFT_L2_BYPASS": 0
+      }
+    },
+    {
+      "label": "G-1024k-S0-T1",
+      "branch": "exp/fft-policy-l1024-s0-t1",
+      "sha": "232dd72dd6f0624ba81486e2ec2208fcdadf1880",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 1024,
+        "DUCC0_FFT_STRIDED_CAP8": 0,
+        "DUCC0_FFT_GREEDY_TAIL": 1,
+        "DUCC0_FFT_CONTIG_CAP8": 1,
+        "DUCC0_FFT_L2_BYPASS": 0
+      }
+    },
+    {
+      "label": "G-1024k-S1-T0",
+      "branch": "exp/fft-policy-l1024-s1-t0",
+      "sha": "4aa5878e75c4f7a9a4bed873b9e0704228934395",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 1024,
+        "DUCC0_FFT_STRIDED_CAP8": 1,
+        "DUCC0_FFT_GREEDY_TAIL": 0,
+        "DUCC0_FFT_CONTIG_CAP8": 1,
+        "DUCC0_FFT_L2_BYPASS": 0
+      }
+    },
+    {
+      "label": "G-1024k-S1-T1",
+      "branch": "exp/fft-policy-l1024-s1-t1",
+      "sha": "ff0f046542e6cb1d4b7457f4f8662e8b825e1f82",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 1024,
+        "DUCC0_FFT_STRIDED_CAP8": 1,
+        "DUCC0_FFT_GREEDY_TAIL": 1,
+        "DUCC0_FFT_CONTIG_CAP8": 1,
+        "DUCC0_FFT_L2_BYPASS": 0
+      }
+    },
+    {
+      "label": "G-1280k-S0-T0",
+      "branch": "exp/fft-policy-l1280-s0-t0",
+      "sha": "0e73e2d90794970aa65f4b3836c7fa804b3c5367",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 1280,
+        "DUCC0_FFT_STRIDED_CAP8": 0,
+        "DUCC0_FFT_GREEDY_TAIL": 0,
+        "DUCC0_FFT_CONTIG_CAP8": 1,
+        "DUCC0_FFT_L2_BYPASS": 0
+      }
+    },
+    {
+      "label": "G-1280k-S0-T1",
+      "branch": "exp/fft-policy-l1280-s0-t1",
+      "sha": "e8b94828a25e0a84a62e530ac677493ecc6105b1",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 1280,
+        "DUCC0_FFT_STRIDED_CAP8": 0,
+        "DUCC0_FFT_GREEDY_TAIL": 1,
+        "DUCC0_FFT_CONTIG_CAP8": 1,
+        "DUCC0_FFT_L2_BYPASS": 0
+      }
+    },
+    {
+      "label": "G-1280k-S1-T0",
+      "branch": "exp/fft-policy-l1280-s1-t0",
+      "sha": "402306939b9f5e1fa17dd855840f3bcd1e518ea1",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 1280,
+        "DUCC0_FFT_STRIDED_CAP8": 1,
+        "DUCC0_FFT_GREEDY_TAIL": 0,
+        "DUCC0_FFT_CONTIG_CAP8": 1,
+        "DUCC0_FFT_L2_BYPASS": 0
+      }
+    },
+    {
+      "label": "G-1280k-S1-T1",
+      "branch": "exp/fft-policy-l1280-s1-t1",
+      "sha": "2cd09e4a1b529413cd758117bbbf5c23b4f8f63d",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 1280,
+        "DUCC0_FFT_STRIDED_CAP8": 1,
+        "DUCC0_FFT_GREEDY_TAIL": 1,
+        "DUCC0_FFT_CONTIG_CAP8": 1,
+        "DUCC0_FFT_L2_BYPASS": 0
+      }
+    },
+    {
+      "label": "G-2048k-S0-T0",
+      "branch": "exp/fft-policy-l2048-s0-t0",
+      "sha": "11cfb90e32e38e7c6a30932f25b6831648141f12",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 2048,
+        "DUCC0_FFT_STRIDED_CAP8": 0,
+        "DUCC0_FFT_GREEDY_TAIL": 0,
+        "DUCC0_FFT_CONTIG_CAP8": 1,
+        "DUCC0_FFT_L2_BYPASS": 0
+      }
+    },
+    {
+      "label": "G-2048k-S0-T1",
+      "branch": "exp/fft-policy-l2048-s0-t1",
+      "sha": "67b33557ac1a6f1446dc67f8b66867b5ebfc9eba",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 2048,
+        "DUCC0_FFT_STRIDED_CAP8": 0,
+        "DUCC0_FFT_GREEDY_TAIL": 1,
+        "DUCC0_FFT_CONTIG_CAP8": 1,
+        "DUCC0_FFT_L2_BYPASS": 0
+      }
+    },
+    {
+      "label": "G-2048k-S1-T0",
+      "branch": "exp/fft-policy-l2048-s1-t0",
+      "sha": "c582554d0ad6f390d6cf7c857d21629c34286906",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 2048,
+        "DUCC0_FFT_STRIDED_CAP8": 1,
+        "DUCC0_FFT_GREEDY_TAIL": 0,
+        "DUCC0_FFT_CONTIG_CAP8": 1,
+        "DUCC0_FFT_L2_BYPASS": 0
+      }
+    },
+    {
+      "label": "G-2048k-S1-T1",
+      "branch": "exp/fft-policy-l2048-s1-t1",
+      "sha": "0109381c04e374bb0b462aec7eba6d942a1cba86",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 2048,
+        "DUCC0_FFT_STRIDED_CAP8": 1,
+        "DUCC0_FFT_GREEDY_TAIL": 1,
+        "DUCC0_FFT_CONTIG_CAP8": 1,
+        "DUCC0_FFT_L2_BYPASS": 0
+      }
+    },
+    {
+      "label": "G-2560k-S0-T0",
+      "branch": "exp/fft-policy-l2560-s0-t0",
+      "sha": "015d7f7499aee20c094145519ea607efb8df0a37",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 2560,
+        "DUCC0_FFT_STRIDED_CAP8": 0,
+        "DUCC0_FFT_GREEDY_TAIL": 0,
+        "DUCC0_FFT_CONTIG_CAP8": 1,
+        "DUCC0_FFT_L2_BYPASS": 0
+      }
+    },
+    {
+      "label": "G-2560k-S0-T1",
+      "branch": "exp/fft-policy-l2560-s0-t1",
+      "sha": "fbef8b48b43abdfa1af8cdf4e59b8e849d3433a9",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 2560,
+        "DUCC0_FFT_STRIDED_CAP8": 0,
+        "DUCC0_FFT_GREEDY_TAIL": 1,
+        "DUCC0_FFT_CONTIG_CAP8": 1,
+        "DUCC0_FFT_L2_BYPASS": 0
+      }
+    },
+    {
+      "label": "G-2560k-S1-T0",
+      "branch": "exp/fft-policy-l2560-s1-t0",
+      "sha": "c615fd269047fbc3932ae4f91586c2c27d823b82",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 2560,
+        "DUCC0_FFT_STRIDED_CAP8": 1,
+        "DUCC0_FFT_GREEDY_TAIL": 0,
+        "DUCC0_FFT_CONTIG_CAP8": 1,
+        "DUCC0_FFT_L2_BYPASS": 0
+      }
+    },
+    {
+      "label": "G-2560k-S1-T1",
+      "branch": "exp/fft-policy-l2560-s1-t1",
+      "sha": "a96dd93fa9f6af5ccc479ac0482102fbab9392b6",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 2560,
+        "DUCC0_FFT_STRIDED_CAP8": 1,
+        "DUCC0_FFT_GREEDY_TAIL": 1,
+        "DUCC0_FFT_CONTIG_CAP8": 1,
+        "DUCC0_FFT_L2_BYPASS": 0
+      }
+    },
+    {
+      "label": "D",
+      "branch": "exp/fft-policy-d",
+      "sha": "c7e83a56cd938704994ffb8fd064e5cf585c476c",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 1024,
+        "DUCC0_FFT_STRIDED_CAP8": 0,
+        "DUCC0_FFT_GREEDY_TAIL": 1,
+        "DUCC0_FFT_CONTIG_CAP8": 0,
+        "DUCC0_FFT_L2_BYPASS": 0
+      }
+    },
+    {
+      "label": "F8",
+      "branch": "exp/fft-policy-f8",
+      "sha": "22340fb52e4f499eb7fb258596dc40350a89ada5",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 1024,
+        "DUCC0_FFT_STRIDED_CAP8": 0,
+        "DUCC0_FFT_GREEDY_TAIL": 1,
+        "DUCC0_FFT_CONTIG_CAP8": 1,
+        "DUCC0_FFT_L2_BYPASS": 1
+      }
+    },
+    {
+      "label": "F16",
+      "branch": "exp/fft-policy-f16",
+      "sha": "6d2a99d7fde91ea39f476655057f725ebae13f32",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 1024,
+        "DUCC0_FFT_STRIDED_CAP8": 0,
+        "DUCC0_FFT_GREEDY_TAIL": 1,
+        "DUCC0_FFT_CONTIG_CAP8": 0,
+        "DUCC0_FFT_L2_BYPASS": 1
+      }
+    },
+    {
+      "label": "G-DETECT",
+      "branch": "exp/fft-policy-l2-detect",
+      "sha": "3460fa22f277a36f8fb1e29499c6415d0d18d794",
+      "compiler_defines": {
+        "DUCC0_FFT_L2_KIB": 0,
+        "DUCC0_FFT_STRIDED_CAP8": 0,
+        "DUCC0_FFT_GREEDY_TAIL": 1,
+        "DUCC0_FFT_CONTIG_CAP8": 1,
+        "DUCC0_FFT_L2_BYPASS": 0
+      }
+    }
+  ]
+}
