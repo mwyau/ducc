@@ -36,6 +36,10 @@ def main():
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
     root = Path(args.input)
+    lock_path = Path(__file__).resolve().parents[2] / "fft_policy_lock.json"
+    pinned = {p["label"]: p for p in json.loads(lock_path.read_text())["profiles"]}
+    permitted_families = {"1d": {"1d"}, "nd": {"2d", "3d"},
+                          "long": {"long"}}
     refs = defaultdict(dict)
     inventory = []
     for fn in sorted(root.rglob("summary.csv")):
@@ -44,12 +48,30 @@ def main():
             meta = json.loads((folder / "metadata.json").read_text())
             src = json.loads((folder / "source_manifest.json").read_text())
             rows = load_csv(fn)
+            suite = src.get("suite")
+            if suite not in permitted_families or suite != meta.get("suite"):
+                raise ValueError("Suite missing or inconsistent between manifest and metadata")
+            label = src["label"]
+            if label not in pinned or src["sha"] != pinned[label]["sha"]:
+                raise ValueError("Source revision differs from pinned lock")
+            if src.get("compiler_defines", {}) != pinned[label].get("compiler_defines", {}):
+                raise ValueError("Compiler defines differ from pinned lock")
+            if int(meta.get("samples", -1)) != 9:
+                raise ValueError("Expected nine timing repeats per case")
+            if not (folder / "raw_repeats.csv.gz").is_file():
+                raise ValueError("Missing raw repeat archive")
+            if any(r["family"] not in permitted_families[suite] for r in rows):
+                raise ValueError("Case family differs from requested suite")
+            if any(int(r["repeats"]) != 9 or float(r["median_ns"]) <= 0 for r in rows):
+                raise ValueError("Missing timing repeats or nonpositive timing")
             if not rows or len(rows) != int(meta["cases_total"]):
                 raise ValueError("Missing or incomplete per-case CSV")
             keys = {r["case_id"] for r in rows}
             if len(keys) != len(rows):
                 raise ValueError("Duplicate case keys")
-            runner = folder.parents[1].name  # artifact name
+            runner = folder.parents[1].name  # suite-qualified artifact name
+            if not runner.startswith(f"fft-policy-runner-{suite}-"):
+                raise ValueError("Artifact runner name does not match suite")
             profile = src["label"]
             isa = int(src["isa"])
             if profile == "BASE":
@@ -136,7 +158,7 @@ def main():
     rejected = len(inventory) - accepted
     lines = ["# DUCC FFT policy CPU-model analysis", "",
              f"Accepted runner/profile artifacts: {accepted}; rejected: {rejected}",
-             f"Expected candidate runner jobs: {args.planned}", "",
+             f"Expected candidate runner jobs across three suites: {args.planned}", "",
              "All comparisons are paired to the same runner's untouched DUCC V3 or V4",
              "reference at the same ISA; no absolute times are pooled between CPU models.",
              "Ratios >1 are faster. Each cell is the median of within-run geometric means.",
