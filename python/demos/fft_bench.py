@@ -17,7 +17,6 @@
 import numpy as np
 import ducc0
 from time import time
-import matplotlib.pyplot as plt
 
 
 rng = np.random.default_rng(42)
@@ -142,6 +141,7 @@ def measure_mkl_fft_inplace(a, nrepeat, nthr):
 
 def bench_nd(ndim, nmax, nthr, ntry, tp, funcs, nrepeat, ttl="", filename="",
              nice_sizes=True):
+    import matplotlib.pyplot as plt
     print("{}D, type {}, max extent is {}:".format(ndim, tp, nmax))
     results = [[] for i in range(len(funcs))]
     for n in range(ntry):
@@ -168,21 +168,31 @@ def bench_nd(ndim, nmax, nthr, ntry, tp, funcs, nrepeat, ttl="", filename="",
     plt.show()
     plt.close()
 
-# ducc0.misc.preallocate_memory(1)
+def legacy_main():
+    # ducc0.misc.preallocate_memory(1)
+    
+    f1 = lambda a, nrepeat, nthr: measure_duccfft(a, nrepeat, nthr, inplace=True, noncritical=False)
+    #f2 = lambda a, nrepeat, nthr: measure_pocketfft(a, nrepeat, nthr, inplace=True)
+    f2 = lambda a, nrepeat, nthr: measure_fftw(a, nrepeat, nthr, flags=('FFTW_MEASURE',), timelimit=20)
+    funcs = (f1, f2)
+    ttl = "duccfft/FFTW"
+    ntry = 10
+    nthr = 1
+    nice_sizes = True
+    limits = [8192, 2048, 256]
+    #limits = [524288, 8192, 512]
+    bench_nd(1, limits[0], nthr, ntry, "c16", funcs, 10, ttl, "1d.png", nice_sizes)
+    bench_nd(2, limits[1], nthr, ntry, "c16", funcs, 10, ttl, "2d.png", nice_sizes)
+    bench_nd(3, limits[2], nthr, ntry, "c16", funcs, 10, ttl, "3d.png", nice_sizes)
+    bench_nd(1, limits[0], nthr, ntry, "c8", funcs, 10, ttl, "1d_single.png", nice_sizes)
+    bench_nd(2, limits[1], nthr, ntry, "c8", funcs, 10, ttl, "2d_single.png", nice_sizes)
+    bench_nd(3, limits[2], nthr, ntry, "c8", funcs, 10, ttl, "3d_single.png", nice_sizes)
+    
 
-f1 = lambda a, nrepeat, nthr: measure_duccfft(a, nrepeat, nthr, inplace=True, noncritical=False)
-#f2 = lambda a, nrepeat, nthr: measure_pocketfft(a, nrepeat, nthr, inplace=True)
-f2 = lambda a, nrepeat, nthr: measure_fftw(a, nrepeat, nthr, flags=('FFTW_MEASURE',), timelimit=20)
-funcs = (f1, f2)
-ttl = "duccfft/FFTW"
-ntry = 10
-nthr = 1
-nice_sizes = True
-limits = [8192, 2048, 256]
-#limits = [524288, 8192, 512]
-bench_nd(1, limits[0], nthr, ntry, "c16", funcs, 10, ttl, "1d.png", nice_sizes)
-bench_nd(2, limits[1], nthr, ntry, "c16", funcs, 10, ttl, "2d.png", nice_sizes)
-bench_nd(3, limits[2], nthr, ntry, "c16", funcs, 10, ttl, "3d.png", nice_sizes)
-bench_nd(1, limits[0], nthr, ntry, "c8", funcs, 10, ttl, "1d_single.png", nice_sizes)
-bench_nd(2, limits[1], nthr, ntry, "c8", funcs, 10, ttl, "2d_single.png", nice_sizes)
-bench_nd(3, limits[2], nthr, ntry, "c8", funcs, 10, ttl, "3d_single.png", nice_sizes)
+if __name__ == "__main__":
+    import sys
+    if "--policy-suite" in sys.argv:
+        from fft_policy_suite import main as policy_main
+        sys.argv.remove("--policy-suite")
+        raise SystemExit(policy_main())
+    legacy_main()
