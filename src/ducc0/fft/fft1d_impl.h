@@ -95,7 +95,7 @@ template<typename T> constexpr inline size_t fft1d_simdlen
 #define DUCC0_FFT_AVX512_RADIX8 1
 #endif
 #ifndef DUCC0_FFT_AVX512_RADIX4
-#define DUCC0_FFT_AVX512_RADIX4 0
+#define DUCC0_FFT_AVX512_RADIX4 1
 #endif
 #include "ducc0/fft/avx512_radix_impl.h"
 
