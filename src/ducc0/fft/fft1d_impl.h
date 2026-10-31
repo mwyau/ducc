@@ -76,6 +76,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "ducc0/infra/threading.h"
 #include "ducc0/math/unity_roots.h"
 #include "ducc0/fft/fft.h"
+#if defined(__AVX512F__) && !defined(DUCC0_NO_SIMD)
+#include <immintrin.h>
+#endif
 
 namespace DUCC0_NAMESPACE {
 
@@ -87,6 +90,14 @@ namespace {
 
 template<typename T> constexpr inline size_t fft1d_simdlen
   = native_simd<T>::size();
+
+#ifndef DUCC0_FFT_AVX512_RADIX8
+#define DUCC0_FFT_AVX512_RADIX8 1
+#endif
+#ifndef DUCC0_FFT_AVX512_RADIX4
+#define DUCC0_FFT_AVX512_RADIX4 0
+#endif
+#include "ducc0/fft/avx512_radix_impl.h"
 
 template<bool fwd, typename T> void ROTX90(Cmplx<T> &a)
   { auto tmp_= fwd ? -a.r : a.r; a.r = fwd ? a.i : -a.i; a.i=tmp_; }
@@ -382,7 +393,13 @@ template <typename Tfs> class cfftp4: public cfftpass<Tfs>
           PM(CH(0,k,0),CH(0,k,2),t2,t3);
           PM(CH(0,k,1),CH(0,k,3),t1,t4);
           }
-          for (size_t i=1; i<ido; ++i)
+          size_t first_i=1;
+#if defined(__AVX512F__) && !defined(DUCC0_NO_SIMD) && DUCC0_FFT_AVX512_RADIX4
+          if constexpr (is_same<Tcd,Tcs>::value)
+            first_i=avx512_butterfly_columns<4,Tfs,fwd>(
+              cc,ch,wa.data(),ido,l1,k,first_i);
+#endif
+          for (size_t i=first_i; i<ido; ++i)
             {
             Tcd t1, t2, t3, t4;
             Tcd cc0=CC(i,0,k), cc1=CC(i,1,k),cc2=CC(i,2,k),cc3=CC(i,3,k);
@@ -768,7 +785,13 @@ template <typename Tfs> class cfftp8: public cfftpass<Tfs>
           PM(CH(0,k,1),CH(0,k,5),a4+a6,a5);
           PM(CH(0,k,3),CH(0,k,7),a4-a6,a7);
           }
-          for (size_t i=1; i<ido; ++i)
+          size_t first_i=1;
+#if defined(__AVX512F__) && !defined(DUCC0_NO_SIMD) && DUCC0_FFT_AVX512_RADIX8
+          if constexpr (is_same<Tcd,Tcs>::value)
+            first_i=avx512_butterfly_columns<8,Tfs,fwd>(
+              cc,ch,wa.data(),ido,l1,k,first_i);
+#endif
+          for (size_t i=first_i; i<ido; ++i)
             {
             Tcd a0, a1, a2, a3, a4, a5, a6, a7;
             PM(a1,a5,CC(i,1,k),CC(i,5,k));
