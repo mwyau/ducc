@@ -1,281 +1,124 @@
-name: ducc-tests
+name: DUCC FFT combined policy 1D ND long multiarch
+
 on:
+  push:
+    branches:
+      - test/fft-policy-combined-20261031
   workflow_dispatch:
     inputs:
-      binding:
-        description: Python binding
-        type: choice
-        required: true
-        default: pybind11
-        options:
-          - pybind11
-          - nanobind
-          - both
-      optimization:
-        description: Optimization
-        type: choice
-        required: true
-        default: native
-        options:
-          - native
-          - portable
-          - multiarch
-          - all
+      samples:
+        description: Measured repeats per case
+        type: number
+        default: 9
+      sample_ms:
+        description: Target duration per measured repeat, in ms
+        type: number
+        default: 2
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
-  test:
-    if: inputs.optimization != 'multiarch'
-    name: >-
-      ${{ matrix.platform.os }} /
-      ${{ matrix.platform.python || '3.11' }}${{ matrix.platform.compiler && format(' ({0})', matrix.platform.compiler) || '' }} /
-      ${{ matrix.binding }} /
-      ${{ matrix.optimization }}
-    runs-on: ${{ matrix.platform.os }}
-    env:
-      DUCC0_OPTIMIZATION: ${{ matrix.optimization }}
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - os: ubuntu-24.04
-            python: '3.8'
-          - os: ubuntu-24.04
-            python: '3.9'
-          - os: ubuntu-24.04
-            python: '3.10'
-          - os: ubuntu-24.04
-            python: '3.11'
-          - os: ubuntu-24.04
-            python: '3.12'
-          - os: ubuntu-24.04
-            python: '3.13'
-          - os: ubuntu-24.04
-            python: '3.14'
-          - os: ubuntu-24.04
-            python: '3.14t'
-          - os: ubuntu-24.04
-            python: '3.15'
-          - os: ubuntu-24.04
-            python: '3.15t'
-          - os: ubuntu-24.04-arm
-            python: '3.14t'
-          - os: ubuntu-24.04-arm
-            python: '3.15t'
-          - os: macos-15-intel
-            python: '3.14t'
-          - os: macos-15-intel
-            python: '3.15t'
-          - os: macos-15
-            python: '3.14t'
-          - os: macos-15
-            python: '3.15t'
-          - os: windows-2025
-            python: '3.14t'
-          - os: windows-2025
-            python: '3.15t'
-          - os: windows-11-arm
-            python: '3.14t'
-          - os: windows-11-arm
-            python: '3.15t'
-          - os: ubuntu-22.04
-          - os: ubuntu-24.04
-            compiler: intel
-          - os: ubuntu-24.04
-            compiler: clang
-          - os: ubuntu-26.04
-          - os: ubuntu-22.04-arm
-          - os: ubuntu-24.04-arm
-          - os: ubuntu-26.04-arm
-          - os: macos-15-intel
-          - os: macos-26-intel
-          - os: macos-15
-          - os: macos-26
-          - os: windows-2022
-          - os: windows-2025
-          - os: windows-11-arm
-        binding: ${{ fromJSON(inputs.binding == 'both' && '["pybind11","nanobind"]' || format('["{0}"]', inputs.binding)) }}
-        optimization: ${{ fromJSON(inputs.optimization == 'all' && '["native","portable"]' || format('["{0}"]', inputs.optimization)) }}
-        exclude:
-          - binding: nanobind
-            optimization: portable
-
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: ${{ matrix.platform.python || '3.11' }}
-          allow-prereleases: true
-
-      - name: Verify free-threaded interpreter
-        if: endsWith(matrix.platform.python, 't')
-        run: python -c "import sysconfig; assert sysconfig.get_config_var('Py_GIL_DISABLED') == 1"
-
-      - name: Install dependencies
-        run: python -m pip install --user --upgrade pytest numpy scipy
-
-      - name: Install Intel compiler
-        if: matrix.platform.compiler == 'intel'
-        run: |
-          wget https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
-          sudo apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
-          sudo add-apt-repository "deb https://apt.repos.intel.com/oneapi all main"
-          sudo apt update
-          sudo apt install intel-oneapi-compiler-dpcpp-cpp
-
-      - name: Build and install
-        if: matrix.platform.compiler != 'intel' && matrix.platform.compiler != 'clang'
-        shell: bash
-        run: ${{ matrix.binding == 'nanobind' && 'DUCC0_USE_NANOBIND=1' || '' }} python -m pip install --user .
-
-      - name: Build and install with Intel compiler
-        if: matrix.platform.compiler == 'intel'
-        shell: bash
-        run: |
-          source /opt/intel/oneapi/setvars.sh intel64
-          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
-          ${{ matrix.binding == 'nanobind' && 'DUCC0_USE_NANOBIND=1' || '' }} CC=icx CXX=icpx python -m pip install --user .
-
-      - name: Build and install with Clang
-        if: matrix.platform.compiler == 'clang'
-        shell: bash
-        run: |
-          clang --version
-          ${{ matrix.binding == 'nanobind' && 'DUCC0_USE_NANOBIND=1' || '' }} CC=clang CXX=clang++ python -m pip install --user .
-
-      - name: Verify binding
-        run: python -c "import ducc0; assert ducc0.__wrapper__ == '${{ matrix.binding }}'; print(ducc0.__wrapper__)"
-
-      - name: Run tests
-        run: python -m pytest python/test -x
-
-  test-multiarch:
-    if: inputs.optimization == 'multiarch' || inputs.optimization == 'all'
-    name: ubuntu-26.04 / 3.11 / ${{ matrix.binding }} / multiarch
+  benchmark:
+    name: multiarch FFT candidate ${{ matrix.slot }}
     runs-on: ubuntu-26.04
-    env:
-      DUCC0_OPTIMIZATION: multiarch-strip
+    timeout-minutes: 360
+    continue-on-error: true
     strategy:
       fail-fast: false
+      max-parallel: 16
       matrix:
-        binding: ${{ fromJSON(inputs.binding == 'both' && '["pybind11","nanobind"]' || format('["{0}"]', inputs.binding)) }}
-
+        slot: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - name: Checkout dispatch branch and reachable pinned implementations
+        uses: actions/checkout@v7
         with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: python -m pip install --user --upgrade pytest numpy scipy
-
-      - name: Build and install
-        shell: bash
-        run: ${{ matrix.binding == 'nanobind' && 'DUCC0_USE_NANOBIND=1' || '' }} python -m pip install --user .
-
-      - name: Verify binding
-        run: python -c "import ducc0; assert ducc0.__wrapper__ == '${{ matrix.binding }}'; print(ducc0.__wrapper__)"
-
-      - name: Check multiarch support
-        id: multiarch_support
-        run: python python/test/check_multiarch.py --require-multiarch --write-github-output
-
-      - name: Run x86-64-v1 tests
-        env:
-          DUCC0_MAX_PSABI_LEVEL: '1'
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Capture CPU and select v3/v4 targets without AVX-512 prefilter
         run: |
-          python python/test/check_multiarch.py --require-active-profile x86-64
-          python -m pytest python/test -x
-
-      - name: Run x86-64-v3 tests
-        if: steps.multiarch_support.outputs.v3 == 'true'
-        env:
-          DUCC0_MAX_PSABI_LEVEL: '3'
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          text=Path('/proc/cpuinfo').read_text()
+          print(next((l for l in text.splitlines() if l.startswith('model name')),'unknown'))
+          flags=set(next((l.split(':',1)[1].split() for l in text.splitlines() if l.startswith('flags')),[]))
+          print('AVX2:', 'avx2' in flags, 'AVX512F:', 'avx512f' in flags)
+          lock=json.loads(Path('fft_policy_lock.json').read_text())
+          print('Pinned profiles:',len(lock['profiles']))
+          PY
+          command -v taskset
+      - name: Install builder and test dependencies
         run: |
-          python python/test/check_multiarch.py --require-active-profile x86-64-v3
-          python -m pytest python/test -x
-
-      - name: Run x86-64-v4 tests
-        if: steps.multiarch_support.outputs.v4 == 'true'
-        env:
-          DUCC0_MAX_PSABI_LEVEL: '4'
+          python -m pip install --upgrade pip
+          python -m pip install 'scikit-build-core>=1.0,<1.1' pybind11 nanobind numpy pytest cmake ninja
+      - name: Compile-check driver and pinned branch manifest
         run: |
-          python python/test/check_multiarch.py --require-active-profile x86-64-v4
-          python -m pytest python/test -x
+          python -m py_compile python/demos/fft_bench.py python/demos/fft_policy_suite.py .github/scripts/fft_policy_runner.py .github/scripts/fft_policy_group.py
+          python - <<'PY'
+          import json,subprocess
+          from pathlib import Path
+          lock=json.loads(Path('fft_policy_lock.json').read_text())
+          for p in lock['profiles']:
+              subprocess.run(['git','cat-file','-e',p['sha']+'^{commit}'],check=True)
+          assert len(lock['profiles']) == 21
+          PY
+      - name: Build and benchmark all pinned variants in x86-64-v3/v4 as eligible
+        run: |
+          python .github/scripts/fft_policy_runner.py \
+            --output "$RUNNER_TEMP/fft-policy-runner" \
+            --samples "${{ inputs.samples || 9 }}" \
+            --sample-ms "${{ inputs.sample_ms || 2 }}"
+      - name: Collect all successful profiles and failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fft-policy-runner-${{ matrix.slot }}
+          path: |
+            ${{ runner.temp }}/fft-policy-runner/status.json
+            ${{ runner.temp }}/fft-policy-runner/runner_benchmarks/
+            ${{ runner.temp }}/fft-policy-runner/logs/
+          if-no-files-found: warn
+          retention-days: 30
 
-  test-pyodide:
-    if: inputs.optimization == 'portable' || inputs.optimization == 'all'
-    name: pyodide / 3.14 / ${{ matrix.binding }} / portable
+  summarize:
+    name: Group all complete runner artifacts by exact CPU and ISA
+    needs: benchmark
+    if: always()
     runs-on: ubuntu-26.04
-    env:
-      DUCC0_OPTIMIZATION: portable
-    strategy:
-      fail-fast: false
-      matrix:
-        binding: ${{ fromJSON(inputs.binding == 'both' && '["pybind11","nanobind"]' || format('["{0}"]', inputs.binding)) }}
-
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
         with:
-          python-version: '3.14'
-          allow-prereleases: true
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
+          persist-credentials: false
+      - name: Download all successful and partial artifacts
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@v4
         with:
-          node-version: '24'
-
-      - name: Build Pyodide wheel
-        shell: bash
+          pattern: fft-policy-runner-*
+          path: results
+          merge-multiple: false
+      - name: Analyze paired speedups and regression counts
         run: |
-          python -m pip install pyodide-build
-          ${{ matrix.binding == 'nanobind' && 'DUCC0_USE_NANOBIND=1' || '' }} pyodide build .
-          pyodide venv .venv-pyodide
-          .venv-pyodide/bin/python -m pip install pytest numpy scipy
-          .venv-pyodide/bin/python -m pip install dist/*.whl
-          echo "$PWD/.venv-pyodide/bin" >> "$GITHUB_PATH"
-
-      - name: Verify binding
-        run: python -c "import ducc0; assert ducc0.__wrapper__ == '${{ matrix.binding }}'; print(ducc0.__wrapper__)"
-
-      - name: Run tests
-        run: python -m pytest python/test -x
-
-  test-docker:
-    if: inputs.optimization == 'portable' || inputs.optimization == 'all'
-    name: i686 / 3.12 / ${{ matrix.binding }} / portable
-    runs-on: ubuntu-24.04
-    env:
-      DUCC0_OPTIMIZATION: portable
-    strategy:
-      fail-fast: false
-      matrix:
-        binding: ${{ fromJSON(inputs.binding == 'both' && '["pybind11","nanobind"]' || format('["{0}"]', inputs.binding)) }}
-
-    steps:
-      - uses: actions/checkout@v7
-      - name: Run i686 tests in Docker
+          mkdir -p results
+          python .github/scripts/fft_policy_group.py results --output grouped --planned 16
+      - name: Publish inspectable findings
+        if: always()
         run: |
-          set -euxo pipefail
-          docker pull quay.io/pypa/manylinux_2_28_i686
-          docker run --rm \
-            --platform=linux/i386 \
-            -e DUCC0_OPTIMIZATION \
-            -v "$PWD:/ducc" \
-            -w /ducc \
-            quay.io/pypa/manylinux_2_28_i686 \
-            /bin/bash -c '
-              set -euxo pipefail
-              python3.12 -m venv /tmp/venv
-              source /tmp/venv/bin/activate
-              python -m pip install --upgrade pip
-              # FIXME: scikit-build-core limited to <1.1 for the moment, because otherwise CI breaks for Python 3.14t and 3.15t
-              python -m pip install pytest "scikit-build-core<1.1" nanobind pybind11
-              python -m pip install numpy==2.0.0 -Cbuild-dir=/tmp/numpy-builddir
-              python -c "import struct; assert struct.calcsize(\"P\") == 4; print(\"pointer bits:\", struct.calcsize(\"P\")*8)"
-              g++ --version
-              DUCC0_CFLAGS="-march=i686 -msse2 -mfpmath=sse" \
-                ${{ matrix.binding == 'nanobind' && 'DUCC0_USE_NANOBIND=1' || '' }} python -m pip install --no-build-isolation .
-              python -c "import ducc0; assert ducc0.__wrapper__ == \"${{ matrix.binding }}\"; print(ducc0.__wrapper__)"
-              python -m pytest python/test -x
-            '
+          if test -f grouped/CPU_GROUPED_REPORT.md; then
+            cat grouped/CPU_GROUPED_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Save grouped data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fft-policy-cpu-grouped-summary
+          path: grouped/
+          if-no-files-found: warn
+          retention-days: 30
