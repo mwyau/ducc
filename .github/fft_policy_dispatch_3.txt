@@ -1,0 +1,5 @@
+FFT policy replicate 3 of 4
+Experiment: 4 L2 thresholds x 2 strided caps x 2 tail policies
+Benchmarks: original 1D, native ND 2D/3D, long 1D
+Measured repeats: 9
+Pinned source manifest: fft_policy_lock.json (unchanged)
