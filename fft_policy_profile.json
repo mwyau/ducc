@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "label": "G-2560k-S0-T1",
+  "source_base": "exp/fft-policy-factorial-20261031",
+  "ducc0_optimization": "multiarch-strip",
+  "compiler_defines": {
+    "DUCC0_FFT_L2_KIB": 2560,
+    "DUCC0_FFT_STRIDED_CAP8": 0,
+    "DUCC0_FFT_GREEDY_TAIL": 1,
+    "DUCC0_FFT_CONTIG_CAP8": 1,
+    "DUCC0_FFT_L2_BYPASS": 0
+  }
+}
