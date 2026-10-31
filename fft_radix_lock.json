@@ -10,12 +10,12 @@
     {
       "label": "R8",
       "branch": "exp/fft-avx512-radix8-20261031",
-      "sha": "a6f59aaec89e90d3243adf65827d7099537c8254"
+      "sha": "353fa10eba0ba6eddabd0daf0cb3bd0773bbd0f8"
     },
     {
       "label": "R48",
       "branch": "exp/fft-avx512-radix48-20261031",
-      "sha": "5740808d73d18ae9052b7d7591bc9741dead012a"
+      "sha": "52e3ff34d40d9f93e5eaa303b9d7465cdb81a5a6"
     }
   ],
   "compiled_isa": "multiarch-strip",
