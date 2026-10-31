@@ -96,7 +96,7 @@ template<typename O,bool fwd> inline void avx512_dft4(
   typename O::V &y2,typename O::V &y3)
   {
   const auto t0=O::add(a,c), t2=O::sub(a,c);
-  const auto t1=O::add(b,d), t3=O::rot90<fwd>(O::sub(b,d));
+  const auto t1=O::add(b,d), t3=O::template rot90<fwd>(O::sub(b,d));
   y0=O::add(t0,t1); y2=O::sub(t0,t1);
   y1=O::add(t2,t3); y3=O::sub(t2,t3);
   }
@@ -130,7 +130,7 @@ inline size_t avx512_butterfly_columns(const Cmplx<T> *cc,
         odd[0],odd[1],odd[2],odd[3]);
       constexpr T h=T(0.707106781186547524400844362104849L);
       odd[1]=O::mul(odd[1],O::constant(h,fwd?-h:h));
-      odd[2]=O::rot90<fwd>(odd[2]);
+      odd[2]=O::template rot90<fwd>(odd[2]);
       odd[3]=O::mul(odd[3],O::constant(-h,fwd?-h:h));
       for(size_t j=0;j<4;++j)
         {
@@ -141,7 +141,7 @@ inline size_t avx512_butterfly_columns(const Cmplx<T> *cc,
     O::store(ch+i+ido*k,y[0]);
     for(size_t j=1;j<R;++j)
       O::store(ch+i+ido*(k+l1*j),
-        O::mul(y[j],O::twiddle<R,fwd>(wa,i,j)));
+        O::mul(y[j],O::template twiddle<R,fwd>(wa,i,j)));
     }
   return i;
   }
