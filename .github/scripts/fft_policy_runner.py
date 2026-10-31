@@ -101,16 +101,25 @@ def main(argv=None):
     p.add_argument("--output", required=True)
     p.add_argument("--samples", type=int, default=9)
     p.add_argument("--sample-ms", type=float, default=2.0)
+    p.add_argument("--suite", choices=("all", "1d", "nd", "long"), required=True,
+                   help="Benchmark only the selected workload family")
+    p.add_argument("--soft-limit-seconds", type=int, default=19800,
+                   help="Stop before the six-hour GitHub job limit (default: 330 min)")
     p.add_argument("--max-profiles", type=int, default=0,
                    help="0 means all pinned profiles")
     args = p.parse_args(argv)
+    if args.soft_limit_seconds <= 0:
+        p.error("--soft-limit-seconds must be positive")
+    deadline = time.time() + args.soft_limit_seconds
     out = Path(args.output).resolve()
     out.mkdir(parents=True, exist_ok=True)
     work = out / "_work"
     work.mkdir(exist_ok=True)
     cpu = get_cpu()
     lock = json.loads((ROOT / "fft_policy_lock.json").read_text())
-    status = {"cpu": cpu, "lock": lock, "profiles": [], "started": time.time()}
+    status = {"cpu": cpu, "lock": lock, "suite": args.suite,
+              "samples": args.samples, "soft_limit_seconds": args.soft_limit_seconds,
+              "profiles": [], "started": time.time()}
     (out / "status.json").write_text(json.dumps(status, indent=2))
     if not cpu["v3"]:
         status["skip_reason"] = "CPU does not support x86-64-v3 (AVX2/FMA/etc.)"
@@ -121,6 +130,9 @@ def main(argv=None):
     allowed = (1, 2, 3, 4) if cpu["v4"] else (1, 2, 3)
     profiles = lock["profiles"][:args.max_profiles or None]
     for profile in profiles:
+        if time.time() >= deadline - 180:
+            status["stop_reason"] = "Soft deadline reached; remaining profiles were not started"
+            break
         label = profile["label"]
         row = {"profile": label, "branch": profile["branch"], "sha": profile["sha"],
                "defines": profile.get("compiler_defines", {}),
@@ -148,8 +160,12 @@ def main(argv=None):
                     # hand-picked FFT test. Limit each profile to avoid
                     # blocking remaining profiles if a test hangs.
                     if isa == (4 if cpu["v4"] else 3):
-                        call([sys.executable, "-m", "pytest", "python/test", "-q", "-x"],
-                             cwd=source, env=env, timeout=1200,
+                        test_budget = int(deadline - time.time() - 120)
+                        if test_budget <= 0:
+                            raise TimeoutError("Soft deadline reached before FFT tests")
+                        call([sys.executable, "-m", "pytest",
+                              "python/test/test_fft.py", "-q", "-x"],
+                             cwd=source, env=env, timeout=min(1200, test_budget),
                              output=out / "logs" / f"{name}-tests.log")
                     dest = out / "runner_benchmarks" / name
                     dest.mkdir(parents=True, exist_ok=True)
@@ -157,13 +173,16 @@ def main(argv=None):
                            str(BENCH), "--policy-suite",
                            "--output", str(dest), "--profile", name,
                            "--samples", str(args.samples),
-                           "--sample-ms", str(args.sample_ms), "--suite", "all"]
-                    call(cmd, cwd=ROOT, env=env, timeout=7200,
+                           "--sample-ms", str(args.sample_ms), "--suite", args.suite]
+                    bench_budget = int(deadline - time.time() - 120)
+                    if bench_budget <= 0:
+                        raise TimeoutError("Soft deadline reached before benchmark")
+                    call(cmd, cwd=ROOT, env=env, timeout=min(7200, bench_budget),
                          output=out / "logs" / f"{name}-bench.log")
                     (dest / "source_manifest.json").write_text(json.dumps({
                         "branch": profile["branch"], "sha": profile["sha"],
                         "compiler_defines": profile.get("compiler_defines", {}),
-                        "label": label, "isa": isa,
+                        "label": label, "isa": isa, "suite": args.suite,
                         "ducc0_optimization": "multiarch-strip"}, indent=2))
                     # Save raw repeats but reduce artifact storage.
                     src = dest / "raw_repeats.csv"
@@ -187,6 +206,9 @@ def main(argv=None):
         finally:
             row["finished"] = time.time()
             (out / "status.json").write_text(json.dumps(status, indent=2))
+        if time.time() >= deadline - 180:
+            status["stop_reason"] = "Soft deadline reached; remaining profiles were not started"
+            break
     status["finished"] = time.time()
     (out / "status.json").write_text(json.dumps(status, indent=2))
     successes = sum(p["status"] == "success" for p in status["profiles"])
