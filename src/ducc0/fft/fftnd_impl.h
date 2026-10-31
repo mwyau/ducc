@@ -64,6 +64,25 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <vector>
 #include <complex>
 #include <algorithm>
+#ifndef DUCC0_FFT_L2_KIB
+#define DUCC0_FFT_L2_KIB 1024
+#endif
+#ifndef DUCC0_FFT_CONTIG_CAP8
+#define DUCC0_FFT_CONTIG_CAP8 1
+#endif
+#ifndef DUCC0_FFT_STRIDED_CAP8
+#define DUCC0_FFT_STRIDED_CAP8 0
+#endif
+#ifndef DUCC0_FFT_GREEDY_TAIL
+#define DUCC0_FFT_GREEDY_TAIL 1
+#endif
+#ifndef DUCC0_FFT_L2_BYPASS
+#define DUCC0_FFT_L2_BYPASS 0
+#endif
+#if defined(__linux__)
+#include <unistd.h>
+#endif
+
 #include "ducc0/infra/useful_macros.h"
 #include "ducc0/infra/error_handling.h"
 #include "ducc0/infra/threading.h"
@@ -693,13 +712,24 @@ DUCC0_NOINLINE void general_nd(const cfmav<T> &in, const vfmav<T> &out,
                      || (((out.stride(axes[iax])*sizeof(T))&4095)==0);
       bool nostride = (in.stride(axes[iax])==1) && (out.stride(axes[iax])==1);
 
-      constexpr size_t l2cache=size_t(1)<<20;
+#if DUCC0_FFT_L2_KIB == 0
+      // Linux hardware-capacity control; fall back if unavailable.
+      static const size_t l2cache = []() -> size_t {
+#if defined(__linux__) && defined(_SC_LEVEL2_CACHE_SIZE)
+        long bytes = sysconf(_SC_LEVEL2_CACHE_SIZE);
+        if (bytes>0) return static_cast<size_t>(bytes);
+#endif
+        return size_t(1)<<20;
+      }();
+#else
+      constexpr size_t l2cache=size_t(DUCC0_FFT_L2_KIB)<<10;
+#endif
       constexpr size_t cacheline=64;
 
       // working set size
       auto wss = [&](size_t vl) { return sizeof(T)*(2*len*vl + plan->bufsize()); };
       // is the FFT small enough to fit into L2 vectorized?
-      if (wss(1)>l2cache) // "long" FFT, don't execute more than one at the same time
+      if ((!DUCC0_FFT_L2_BYPASS) && wss(1)>l2cache) // "long" FFT, don't execute more than one at the same time
         {
         n_simul=1;
         if (critstride)  // make bunch large to reduce overall copy cost
@@ -722,10 +752,14 @@ DUCC0_NOINLINE void general_nd(const cfmav<T> &in, const vfmav<T> &out,
         if (nostride)
           {
           n_simul = vlen;
-          while((n_simul>1) && (wss(n_simul)>l2cache)) n_simul /= 2;
+          while((!DUCC0_FFT_L2_BYPASS) && (n_simul>1) && (wss(n_simul)>l2cache)) n_simul /= 2;
           }
         else
           n_simul = vlen;
+        if (DUCC0_FFT_CONTIG_CAP8 && nostride && vlen==16 && n_simul>8) n_simul=8;
+        if (DUCC0_FFT_STRIDED_CAP8 && !nostride && vlen==16 && n_simul>8) n_simul=8;
+        if (DUCC0_FFT_GREEDY_TAIL && vlen>=8)
+          while ((n_simul>1) && (n_simul>it.remaining())) n_simul/=2;
         if (critstride)  // make bunch large to reduce overall copy cost
           {
           n_bunch=n_simul;
@@ -764,7 +798,7 @@ DUCC0_NOINLINE void general_nd(const cfmav<T> &in, const vfmav<T> &out,
                 }
               }
             }
-          if (n_simul==lvlen)
+          if (DUCC0_FFT_GREEDY_TAIL ? (n_simul>=lvlen) : (n_simul==lvlen))
             {
             if (it.remaining()>=lvlen)
               {
@@ -792,7 +826,7 @@ DUCC0_NOINLINE void general_nd(const cfmav<T> &in, const vfmav<T> &out,
                 }
               }
             }
-          if (n_simul==lvlen)
+          if (DUCC0_FFT_GREEDY_TAIL ? (n_simul>=lvlen) : (n_simul==lvlen))
             {
             if (it.remaining()>=lvlen)
               {
@@ -820,7 +854,7 @@ DUCC0_NOINLINE void general_nd(const cfmav<T> &in, const vfmav<T> &out,
                 }
               }
             }
-          if (n_simul==lvlen)
+          if (DUCC0_FFT_GREEDY_TAIL ? (n_simul>=lvlen) : (n_simul==lvlen))
             {
             if (it.remaining()>=lvlen)
               {
@@ -833,6 +867,22 @@ DUCC0_NOINLINE void general_nd(const cfmav<T> &in, const vfmav<T> &out,
               }
             }
           }
+#if DUCC0_FFT_GREEDY_TAIL
+        // Exhaust a remaining 2-lane group where a native 2-wide vector exists.
+        if constexpr ((vlen>4) && simd_exists<T0,2>)
+          {
+          constexpr size_t lvlen = 2;
+          if (n_simul>=lvlen && it.remaining()>=lvlen)
+            {
+            TmpStorage2<add_vec_t<T, lvlen>,T,T0> storage2(storage);
+            while (it.remaining()>=lvlen)
+              {
+              it.advance(lvlen);
+              exec(it, tin, out, storage2, *plan, fct, nth1d);
+              }
+            }
+          }
+#endif
 #endif
         {
         TmpStorage2<T,T,T0> storage2(storage);
