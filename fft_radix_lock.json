@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "description": "Baseline vs experimental AVX512 radix-8 vs radix-4+8, same source pinned across 16 runners",
+  "profiles": [
+    {
+      "label": "BASE",
+      "branch": "ducc0",
+      "sha": "757145c328d4680fc23bf37e372860fa49c4d8b5"
+    },
+    {
+      "label": "R8",
+      "branch": "exp/fft-avx512-radix8-20261031",
+      "sha": "a6f59aaec89e90d3243adf65827d7099537c8254"
+    },
+    {
+      "label": "R48",
+      "branch": "exp/fft-avx512-radix48-20261031",
+      "sha": "5740808d73d18ae9052b7d7591bc9741dead012a"
+    }
+  ],
+  "compiled_isa": "multiarch-strip",
+  "runtime_isa": [
+    2,
+    3,
+    4
+  ],
+  "samples": 9
+}
