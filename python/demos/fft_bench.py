@@ -14,6 +14,13 @@
 # Copyright(C) 2019-2023 Max-Planck-Society
 
 
+import sys
+if __name__ == "__main__" and "--radix-suite" in sys.argv:
+    from fft_radix_bench import main as _radix_main
+    sys.argv.remove("--radix-suite")
+    _radix_main()
+    raise SystemExit(0)
+
 import numpy as np
 import ducc0
 from time import time
