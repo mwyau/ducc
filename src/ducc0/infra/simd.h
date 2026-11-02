@@ -914,6 +914,31 @@ template<> struct avx512_complex_ops<float>
     const auto s=_mm512_permute_ps(x,0xB1);
     return mul(s,_mm512_mask_blend_ps(0xAAAA,set(-w),set(w)));
     }
+  static V load(const void *p) { return _mm512_loadu_ps(p); }
+  static void store(void *p, V x) { _mm512_storeu_ps(p,x); }
+  static V sub(V a, V b) { return _mm512_sub_ps(a,b); }
+  static V constant(float r, float i)
+    { return _mm512_setr_ps(r,i,r,i,r,i,r,i,r,i,r,i,r,i,r,i); }
+  template<bool fwd> static V rot90(V x)
+    {
+    const auto y=_mm512_permute_ps(x,0xB1);
+    const auto sign=fwd
+      ? _mm512_setr_ps(0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f)
+      : _mm512_setr_ps(-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f);
+    return _mm512_castsi512_ps(_mm512_xor_si512(
+      _mm512_castps_si512(y),_mm512_castps_si512(sign)));
+    }
+  static V cmul(V a, V w)
+    {
+    const auto wr=_mm512_moveldup_ps(w), wi=_mm512_movehdup_ps(w);
+    return _mm512_fmaddsub_ps(a,wr,_mm512_mul_ps(_mm512_permute_ps(a,0xB1),wi));
+    }
+  template<typename Reader> static V pack_complex(Reader read)
+    {
+    const auto a=read(0),b=read(1),c=read(2),d=read(3);
+    const auto e=read(4),f=read(5),g=read(6),h=read(7);
+    return _mm512_setr_ps(a.r,a.i,b.r,b.i,c.r,c.i,d.r,d.i,e.r,e.i,f.r,f.i,g.r,g.i,h.r,h.i);
+    }
   };
 
 template<> struct avx512_complex_ops<double>
@@ -934,6 +959,30 @@ template<> struct avx512_complex_ops<double>
     {
     const auto s=_mm512_permute_pd(x,0x55);
     return mul(s,_mm512_mask_blend_pd(0xAA,set(-w),set(w)));
+    }
+  static V load(const void *p) { return _mm512_loadu_pd(p); }
+  static void store(void *p, V x) { _mm512_storeu_pd(p,x); }
+  static V sub(V a, V b) { return _mm512_sub_pd(a,b); }
+  static V constant(double r, double i)
+    { return _mm512_setr_pd(r,i,r,i,r,i,r,i); }
+  template<bool fwd> static V rot90(V x)
+    {
+    const auto y=_mm512_permute_pd(x,0x55);
+    const auto sign=fwd
+      ? _mm512_setr_pd(0.,-0.,0.,-0.,0.,-0.,0.,-0.)
+      : _mm512_setr_pd(-0.,0.,-0.,0.,-0.,0.,-0.,0.);
+    return _mm512_castsi512_pd(_mm512_xor_si512(
+      _mm512_castpd_si512(y),_mm512_castpd_si512(sign)));
+    }
+  static V cmul(V a, V w)
+    {
+    const auto wr=_mm512_movedup_pd(w), wi=_mm512_permute_pd(w,0xFF);
+    return _mm512_fmaddsub_pd(a,wr,_mm512_mul_pd(_mm512_permute_pd(a,0x55),wi));
+    }
+  template<typename Reader> static V pack_complex(Reader read)
+    {
+    const auto a=read(0),b=read(1),c=read(2),d=read(3);
+    return _mm512_setr_pd(a.r,a.i,b.r,b.i,c.r,c.i,d.r,d.i);
     }
   };
 #endif
