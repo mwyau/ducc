@@ -16,8 +16,7 @@
 
 import numpy as np
 import ducc0
-from time import time
-import matplotlib.pyplot as plt
+from time import time, perf_counter_ns
 
 
 rng = np.random.default_rng(42)
@@ -158,6 +157,7 @@ def bench_nd(ndim, nmax, nthr, ntry, tp, funcs, nrepeat, ttl="", filename="",
             #sleep(1)  # to wait for potential busy-waiting threads
         print("{0:5.2e}/{1:5.2e} = {2:5.2f}  L2 error={3}".format(results[0][n], results[1][n], results[0][n]/results[1][n], ducc0.misc.l2error(output[0], output[1])))
     results = np.array(results)
+    import matplotlib.pyplot as plt
     plt.title("{}: {}D, {}, max_extent={}".format(
         ttl, ndim, str(tp), nmax))
     plt.xlabel("time ratio")
@@ -168,21 +168,147 @@ def bench_nd(ndim, nmax, nthr, ntry, tp, funcs, nrepeat, ttl="", filename="",
     plt.show()
     plt.close()
 
-# ducc0.misc.preallocate_memory(1)
 
-f1 = lambda a, nrepeat, nthr: measure_duccfft(a, nrepeat, nthr, inplace=True, noncritical=False)
-#f2 = lambda a, nrepeat, nthr: measure_pocketfft(a, nrepeat, nthr, inplace=True)
-f2 = lambda a, nrepeat, nthr: measure_fftw(a, nrepeat, nthr, flags=('FFTW_MEASURE',), timelimit=20)
-funcs = (f1, f2)
-ttl = "duccfft/FFTW"
-ntry = 10
-nthr = 1
-nice_sizes = True
-limits = [8192, 2048, 256]
-#limits = [524288, 8192, 512]
-bench_nd(1, limits[0], nthr, ntry, "c16", funcs, 10, ttl, "1d.png", nice_sizes)
-bench_nd(2, limits[1], nthr, ntry, "c16", funcs, 10, ttl, "2d.png", nice_sizes)
-bench_nd(3, limits[2], nthr, ntry, "c16", funcs, 10, ttl, "3d.png", nice_sizes)
-bench_nd(1, limits[0], nthr, ntry, "c8", funcs, 10, ttl, "1d_single.png", nice_sizes)
-bench_nd(2, limits[1], nthr, ntry, "c8", funcs, 10, ttl, "2d_single.png", nice_sizes)
-bench_nd(3, limits[2], nthr, ntry, "c8", funcs, 10, ttl, "3d_single.png", nice_sizes)
+# Fixed cases for comparing FFT implementations across CPU ISA levels.
+# A case uses either C-contiguous layout or F-contiguous (transposed strides).
+# Shapes and axes are deterministic so separate builds run identical work.
+FFT_CASES = [
+    # Small transforms and contiguous 1D entry path.
+    ("tiny", "tiny-8", (8,), (0,), "C"),
+    ("tiny", "tiny-16", (16,), (0,), "C"),
+    ("tiny", "tiny-32", (32,), (0,), "C"),
+    ("tiny", "tiny-64", (64,), (0,), "C"),
+    ("tiny", "tiny-128", (128,), (0,), "C"),
+    ("tiny", "tiny-256", (256,), (0,), "C"),
+    # Power-of-two / radix-4 and radix-8 butterflies.
+    ("radix", "radix4-256", (256,), (0,), "C"),
+    ("radix", "radix8-512", (512,), (0,), "C"),
+    ("radix", "radix8-1024", (1024,), (0,), "C"),
+    ("radix", "radix8-2048", (2048,), (0,), "C"),
+    ("radix", "radix8-4096", (4096,), (0,), "C"),
+    ("radix", "radix8-8192", (8192,), (0,), "C"),
+    ("radix", "radix8-16384", (16384,), (0,), "C"),
+    # Odd and mixed radices, including the 89 x 23 generic-radix case.
+    ("generic", "odd-89", (89,), (0,), "C"),
+    ("generic", "odd-257", (257,), (0,), "C"),
+    ("generic", "odd-511", (511,), (0,), "C"),
+    ("generic", "odd-1023", (1023,), (0,), "C"),
+    ("generic", "odd-2047", (2047,), (0,), "C"),
+    ("generic", "odd-4095", (4095,), (0,), "C"),
+    ("generic", "generic-89x23", (89*23,), (0,), "C"),
+    ("generic", "mixed-8x89", (8*89,), (0,), "C"),
+    ("generic", "mixed-23x89", (23*89,), (0,), "C"),
+    # Large 1D FFTs.
+    ("long", "long-32768", (32768,), (0,), "C"),
+    ("long", "long-65536", (65536,), (0,), "C"),
+    ("long", "long-131072", (131072,), (0,), "C"),
+    # 2D and 3D transforms.
+    ("nd", "nd-16x64", (16,64), (0,1), "C"),
+    ("nd", "nd-64x16", (64,16), (0,1), "C"),
+    ("nd", "nd-32x128", (32,128), (0,1), "C"),
+    ("nd", "nd-64x64", (64,64), (0,1), "C"),
+    ("nd", "nd-8x89", (8,89), (0,1), "C"),
+    ("nd", "nd-23x89", (23,89), (0,1), "C"),
+    ("nd", "nd-64x128", (64,128), (0,1), "C"),
+    ("nd", "nd-8x16x32", (8,16,32), (0,1,2), "C"),
+    ("nd", "nd-16x16x16", (16,16,16), (0,1,2), "C"),
+    ("nd", "nd-16x32x64", (16,32,64), (0,1,2), "C"),
+    # Single-axis transforms on strided and transposed arrays.
+    ("strided", "strided-axis0-128x32", (128,32), (0,), "C"),
+    ("strided", "strided-axis0-89x23", (89,23), (0,), "C"),
+    ("strided", "strided-axis1-23x89", (23,89), (1,), "F"),
+]
+
+
+def measure_matrix_case(case, dtype, nrepeat, nwarmup, nthr, seed):
+    """Return individual elapsed times (microseconds), excluding setup."""
+    _, _, shape, axes, order = case
+    local_rng = np.random.default_rng(seed)
+    values = (local_rng.random(shape)-0.5
+              + 1j*(local_rng.random(shape)-0.5)).astype(dtype)
+    inp = np.array(values, order=order, copy=True)
+    out = np.empty_like(inp, order="K")
+
+    def execute():
+        ducc0.fft.c2c(inp, out=out, axes=axes, forward=True, nthreads=nthr)
+
+    for _ in range(nwarmup):
+        execute()
+    times = []
+    for _ in range(nrepeat):
+        start = perf_counter_ns()
+        execute()
+        times.append((perf_counter_ns()-start)/1000.)
+    return times
+
+
+def run_matrix(args):
+    import csv
+    import re
+
+    groups = set(args.groups.split(",")) if args.groups != "all" else None
+    dtypes = ["complex64", "complex128"] if args.dtype == "both" else [args.dtype]
+    cases = [c for c in FFT_CASES
+             if (groups is None or c[0] in groups)
+             and (not args.case_filter or re.search(args.case_filter, c[1]))]
+    if not cases:
+        raise SystemExit("No FFT cases matched")
+    columns = ["group", "case", "shape", "axes", "layout", "dtype",
+               "nthreads", "warmups", "repeats", "median_us", "min_us", "max_us"]
+    rows = []
+    for case in cases:
+        group, name, shape, axes, order = case
+        for dtype in dtypes:
+            times = measure_matrix_case(case, dtype, args.repeats,
+                                        args.warmups, args.threads, args.seed)
+            row = [group, name, "x".join(map(str, shape)),
+                   ",".join(map(str, axes)), order, dtype,
+                   args.threads, args.warmups, args.repeats,
+                   float(np.median(times)), min(times), max(times)]
+            rows.append(row)
+            print(f"{name:27} {dtype:10} {row[9]:11.3f} us", flush=True)
+
+    if args.csv:
+        with open(args.csv, "w", newline="", encoding="utf-8") as output:
+            writer = csv.writer(output)
+            writer.writerow(columns)
+            writer.writerows(rows)
+        print(f"Wrote {args.csv}")
+
+
+def run_legacy():
+    f1 = lambda a, nrepeat, nthr: measure_duccfft(a, nrepeat, nthr, inplace=True, noncritical=False)
+    f2 = lambda a, nrepeat, nthr: measure_fftw(a, nrepeat, nthr, flags=('FFTW_MEASURE',), timelimit=20)
+    funcs = (f1, f2)
+    for ndim, nmax in ((1,8192),(2,2048),(3,256)):
+        for dtype, suffix in (("c16",""),("c8","_single")):
+            bench_nd(ndim, nmax, 1, 10, dtype, funcs, 10,
+                     "duccfft/FFTW", f"{ndim}d{suffix}.png", True)
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="DUCC FFT benchmarks")
+    parser.add_argument("--legacy", action="store_true",
+                        help="run the original randomized DUCC/FFTW comparison")
+    parser.add_argument("--groups", default="all",
+                        help="comma-separated groups: tiny,radix,generic,long,nd,strided")
+    parser.add_argument("--case-filter", default="",
+                        help="regex selecting case names")
+    parser.add_argument("--dtype", choices=("both","complex64","complex128"), default="both")
+    parser.add_argument("--repeats", type=int, default=9)
+    parser.add_argument("--warmups", type=int, default=3)
+    parser.add_argument("--threads", type=int, default=1)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--csv", default="", help="optional CSV output")
+    args = parser.parse_args()
+    if args.repeats < 1 or args.warmups < 0 or args.threads < 1:
+        parser.error("repeats and threads must be positive; warmups nonnegative")
+    if args.legacy:
+        run_legacy()
+    else:
+        run_matrix(args)
+
+
+if __name__ == "__main__":
+    main()
