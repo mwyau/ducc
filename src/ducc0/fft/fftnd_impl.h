@@ -717,15 +717,11 @@ DUCC0_NOINLINE void general_nd(const cfmav<T> &in, const vfmav<T> &out,
         }
       else  // fairly small individual FFT, vectorizing probably beneficial
         {
-        // if no stride, only vectorize up to a total size that still fits into L2
-        // if strided, always vectorize (TBC)
+        // Avoid 16-wide AVX-512 float32 batches.
+        n_simul = (vlen==16 && is_same_v<T0,float>) ? size_t(8) : vlen;
+        // Limit contiguous transforms to the L2 working set.
         if (nostride)
-          {
-          n_simul = vlen;
-          while((n_simul>1) && (wss(n_simul)>l2cache)) n_simul /= 2;
-          }
-        else
-          n_simul = vlen;
+          while ((n_simul>1) && (wss(n_simul)>l2cache)) n_simul/=2;
         if (critstride)  // make bunch large to reduce overall copy cost
           {
           n_bunch=n_simul;
