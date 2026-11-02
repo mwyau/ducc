@@ -948,6 +948,46 @@ template <typename Tfs> class cfftpg: public cfftpass<Tfs>
     auto WA(size_t x, size_t i) const
       { return wa[i-1+x*(ido-1)]; }
 
+    template<bool fwd> void accumulate_avx512(Tcs *cc, const Tcs *ch,
+          size_t idl1, size_t l) const
+      {
+      using O=detail_simd::avx512_complex_ops<Tfs>;
+      const size_t ipph=(ip+1)/2, lc=ip-l;
+      const auto wal=fwd ? csarr[l].conj() : csarr[l];
+      const auto wal2=fwd ? csarr[2*l].conj() : csarr[2*l];
+      for (size_t ik0=0; ik0<idl1; ik0+=O::ncomplex)
+        {
+        const size_t n=std::min(O::ncomplex,idl1-ik0);
+        const auto m=O::mask(n);
+        auto load=[&](size_t j) { return O::masked_load(ch+idl1*j+ik0,m); };
+        auto acc=O::fmadd(load(2),O::set(wal2.r),
+                         O::fmadd(load(1),O::set(wal.r),load(0)));
+        auto accc=O::add(O::signed_swap(load(ip-1),wal.i),
+                         O::signed_swap(load(ip-2),wal2.i));
+        size_t iwal=2*l, j=3, jc=ip-3;
+        for (;j<ipph-1;j+=2,jc-=2)
+          {
+          iwal+=l; if (iwal>ip) iwal-=ip;
+          const auto w1=fwd ? csarr[iwal].conj() : csarr[iwal];
+          iwal+=l; if (iwal>ip) iwal-=ip;
+          const auto w2=fwd ? csarr[iwal].conj() : csarr[iwal];
+          acc=O::add(acc,O::fmadd(load(j),O::set(w1.r),
+                                  O::mul(load(j+1),O::set(w2.r))));
+          accc=O::add(accc,O::add(O::signed_swap(load(jc),w1.i),
+                                   O::signed_swap(load(jc-1),w2.i)));
+          }
+        for (;j<ipph;++j,--jc)
+          {
+          iwal+=l; if (iwal>ip) iwal-=ip;
+          const auto w=fwd ? csarr[iwal].conj() : csarr[iwal];
+          acc=O::add(acc,O::mul(load(j),O::set(w.r)));
+          accc=O::add(accc,O::signed_swap(load(jc),w.i));
+          }
+        O::masked_store(cc+idl1*l+ik0,m,acc);
+        O::masked_store(cc+idl1*lc+ik0,m,accc);
+        }
+      }
+
     template<bool fwd, typename Tcd> Tcd *exec_
       (Tcd * DUCC0_RESTRICT cc, Tcd * DUCC0_RESTRICT ch, Tcd * /*buf*/, size_t /*nthreads*/) const
       {
@@ -980,8 +1020,29 @@ template <typename Tfs> class cfftpg: public cfftpass<Tfs>
             tmp+=CH(i,k,j);
           CX(i,k,0) = tmp;
           }
-      for (size_t l=1, lc=ip-1; l<ipph; ++l, --lc)
+      // AVX-512 accelerates selected scalar generic-radix accumulation stages.
+      // SIMD across transforms and other CPU targets retain the original loop.
+      constexpr bool has_512bit_simd = fft1d_simdlen<Tfs>*sizeof(Tfs)==64;
+      constexpr bool scalar_execution = is_same<Tcd,Tcs>::value;
+      bool use_avx512_accum = false;
+      if constexpr (has_512bit_simd && scalar_execution && detail_simd::avx512_complex_available<Tfs>)
         {
+        if constexpr (is_same<Tfs,float>::value)
+          use_avx512_accum = (ip>=23) && ((idl1>=2 && idl1<=8) ||
+            (ip>=89 && l1==23 && ido==1));
+        else if constexpr (is_same<Tfs,double>::value)
+          use_avx512_accum = (ip>=23) && (idl1>=2 && idl1<=4);
+        }
+
+      if (use_avx512_accum)
+        {
+        if constexpr (has_512bit_simd && scalar_execution && detail_simd::avx512_complex_available<Tfs>)
+          for (size_t l=1, lc=ip-1; l<ipph; ++l, --lc)
+            accumulate_avx512<fwd>(cc,ch,idl1,l);
+        }
+      else
+        for (size_t l=1, lc=ip-1; l<ipph; ++l, --lc)
+          {
         // j=0,1,2
         {
         auto wal  = fwd ? csarr[  l].conj() : csarr[  l];
