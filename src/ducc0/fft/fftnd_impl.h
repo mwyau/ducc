@@ -722,6 +722,13 @@ DUCC0_NOINLINE void general_nd(const cfmav<T> &in, const vfmav<T> &out,
         // Limit contiguous transforms to the L2 working set.
         if (nostride)
           while ((n_simul>1) && (wss(n_simul)>l2cache)) n_simul/=2;
+        // Use narrower SIMD tails; float32 skips 2-wide.
+        if constexpr (vlen>=8)
+          {
+          while (n_simul>1 && n_simul>it.remaining()) n_simul/=2;
+          if constexpr (is_same_v<T0, float>)
+            if (n_simul==2) n_simul=1;
+          }
         if (critstride)  // make bunch large to reduce overall copy cost
           {
           n_bunch=n_simul;
@@ -760,7 +767,7 @@ DUCC0_NOINLINE void general_nd(const cfmav<T> &in, const vfmav<T> &out,
                 }
               }
             }
-          if (n_simul==lvlen)
+          if (n_simul>=lvlen)
             {
             if (it.remaining()>=lvlen)
               {
@@ -773,7 +780,8 @@ DUCC0_NOINLINE void general_nd(const cfmav<T> &in, const vfmav<T> &out,
               }
             }
           }
-        if constexpr ((vlen>2) && (simd_exists<T0,vlen/2>))
+        if constexpr ((vlen>2) && simd_exists<T0,vlen/2>
+                      && ((vlen/2)!=2 || !is_same_v<T0,float>))
           {
           constexpr size_t lvlen = vlen/2;
           if (n_simul>=lvlen)
@@ -788,7 +796,7 @@ DUCC0_NOINLINE void general_nd(const cfmav<T> &in, const vfmav<T> &out,
                 }
               }
             }
-          if (n_simul==lvlen)
+          if (n_simul>=lvlen)
             {
             if (it.remaining()>=lvlen)
               {
@@ -801,7 +809,8 @@ DUCC0_NOINLINE void general_nd(const cfmav<T> &in, const vfmav<T> &out,
               }
             }
           }
-        if constexpr ((vlen>4) && (simd_exists<T0,vlen/4>))
+        if constexpr ((vlen>4) && simd_exists<T0,vlen/4>
+                      && ((vlen/4)!=2 || !is_same_v<T0,float>))
           {
           constexpr size_t lvlen = vlen/4;
           if (n_simul>=lvlen)
@@ -816,7 +825,7 @@ DUCC0_NOINLINE void general_nd(const cfmav<T> &in, const vfmav<T> &out,
                 }
               }
             }
-          if (n_simul==lvlen)
+          if (n_simul>=lvlen)
             {
             if (it.remaining()>=lvlen)
               {
