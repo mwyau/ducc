@@ -213,11 +213,12 @@ template <typename Tfs> class cfftpass
       }
 
     static shared_ptr<cfftpass> make_pass(size_t l1, size_t ido, size_t ip,
-      const Troots<Tfs> &roots, bool vectorize=false);
-    static shared_ptr<cfftpass> make_pass(size_t ip, bool vectorize=false)
+      const Troots<Tfs> &roots, bool vectorize=false, size_t intra_width=4);
+    static shared_ptr<cfftpass> make_pass(size_t ip, bool vectorize=false,
+      size_t intra_width=4)
       {
       return make_pass(1,1,ip,make_shared<UnityRoots<Tfs,Cmplx<Tfs>>>(ip),
-        vectorize);
+        vectorize, intra_width);
       }
   };
 
@@ -278,9 +279,10 @@ template<typename Tfs> class pocketfft_c
     Tcpass<Tfs> plan;
 
   public:
-    explicit pocketfft_c(size_t n, bool vectorize=false)
+    explicit pocketfft_c(size_t n, bool vectorize=false,
+      size_t intra_width=4)
       : N(n), critbuf(((N&1023)==0) ? 16 : 0),
-        plan(cfftpass<Tfs>::make_pass(n,vectorize)) {}
+        plan(cfftpass<Tfs>::make_pass(n,vectorize,intra_width)) {}
     size_t length() const { return N; }
     size_t bufsize() const { return N*plan->needs_copy()+2*critbuf+plan->bufsize(); }
     size_t footprint() const { return plan->footprint(); }
