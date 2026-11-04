@@ -1452,15 +1452,16 @@ template<typename T> DUCC0_NOINLINE void c2c(const cfmav<complex<T>> &in,
   util::sanity_check_onetype(in, out, in.data()==out.data(), axes);
   if (in.size()==0) return;
 
-  // For long, contiguous batched 1D complex FFTs, use SIMD within each
-  // transform rather than across transforms. Only enter when eight-wide
-  // SIMD is supported; unsupported architectures retain the L2 scheduler.
+  // For long, contiguous batched complex FFTs, use SIMD within each
+  // transform. The batch count has no fixed upper bound above 131072.
   if constexpr(simd_exists<T,8>)
     {
     if ((in.ndim()==2) && (axes.size()==1) && (axes[0]==1)
         && (in.shape(0)>=2) && (in.shape(1)>=65536)
-        && ((in.shape(0)<=8) ||
-            (is_same_v<T,float> && in.shape(1)>=131072)) && ((in.shape(1)&7)==0)
+        && ((in.shape(0)<=8) || (in.shape(1)>=131072))
+        // Retain the L2 scheduler for large multithreaded double FFTs.
+        && (is_same_v<T,float> || (nthreads==1)
+            || (in.shape(1)<262144)) && ((in.shape(1)&7)==0)
         && (in.stride(1)==1) && (out.stride(1)==1)
         && (in.stride(0)==ptrdiff_t(in.shape(1)))
         && (out.stride(0)==ptrdiff_t(out.shape(1))))

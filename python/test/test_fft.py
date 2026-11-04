@@ -517,3 +517,17 @@ def test_c2c_uncapped_complex64(batch, n, forward, nthreads):
                     np.fft.ifft(src[row])*n)
         error = np.linalg.norm(out[row]-expected)/np.linalg.norm(expected)
         assert error < 2e-5
+
+
+@pmp("batch,n", ((16, 65536), (16, 131072), (32, 131072), (16, 262144)))
+@pmp("forward", (True, False))
+@pmp("nthreads", (1, 4))
+def test_c2c_uncapped_complex128(batch, n, forward, nthreads):
+    rng = np.random.default_rng(4871 + batch + n)
+    src = rng.standard_normal((batch, n)) + 1j*rng.standard_normal((batch, n))
+    out = fft.c2c(src, axes=(1,), forward=forward, nthreads=nthreads)
+    for row in (0, batch//2, batch-1):
+        expected = (np.fft.fft(src[row]) if forward else
+                    np.fft.ifft(src[row])*n)
+        error = np.linalg.norm(out[row]-expected)/np.linalg.norm(expected)
+        assert error < 2e-12
