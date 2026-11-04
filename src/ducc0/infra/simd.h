@@ -885,4 +885,108 @@ template<typename Tsimd> inline void unaligned_add(typename Tsimd::value_type *p
   { storeu(loadu<Tsimd>(ptr)+v, ptr); }
 }
 #endif
+namespace DUCC0_NAMESPACE {
+namespace detail_simd {
+// Interleaved complex SIMD operations for AVX-512.
+template<typename T> inline constexpr bool avx512_complex_available = false;
+template<typename T> struct avx512_complex_ops;
+
+#if defined(__AVX512F__) && !defined(DUCC0_NO_SIMD)
+template<> inline constexpr bool avx512_complex_available<float> = true;
+template<> inline constexpr bool avx512_complex_available<double> = true;
+
+template<> struct avx512_complex_ops<float>
+  {
+  using V = __m512;
+  using Mask = __mmask16;
+  static constexpr size_t ncomplex=8;
+  static Mask mask(size_t n) { return Mask((1u << (2*n))-1u); }
+  static V masked_load(const void *p, Mask m)
+    { return _mm512_maskz_loadu_ps(m,p); }
+  static void masked_store(void *p, Mask m, V x)
+    { _mm512_mask_storeu_ps(p,m,x); }
+  static V set(float x) { return _mm512_set1_ps(x); }
+  static V add(V a, V b) { return _mm512_add_ps(a,b); }
+  static V mul(V a, V b) { return _mm512_mul_ps(a,b); }
+  static V fmadd(V a, V b, V c) { return _mm512_fmadd_ps(a,b,c); }
+  static V signed_swap(V x, float w)
+    {
+    const auto s=_mm512_permute_ps(x,0xB1);
+    return mul(s,_mm512_mask_blend_ps(0xAAAA,set(-w),set(w)));
+    }
+  static V load(const void *p) { return _mm512_loadu_ps(p); }
+  static void store(void *p, V x) { _mm512_storeu_ps(p,x); }
+  static V sub(V a, V b) { return _mm512_sub_ps(a,b); }
+  static V constant(float r, float i)
+    { return _mm512_setr_ps(r,i,r,i,r,i,r,i,r,i,r,i,r,i,r,i); }
+  template<bool fwd> static V rot90(V x)
+    {
+    const auto y=_mm512_permute_ps(x,0xB1);
+    const auto sign=fwd
+      ? _mm512_setr_ps(0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f)
+      : _mm512_setr_ps(-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f,-0.f,0.f);
+    return _mm512_castsi512_ps(_mm512_xor_si512(
+      _mm512_castps_si512(y),_mm512_castps_si512(sign)));
+    }
+  static V cmul(V a, V w)
+    {
+    const auto wr=_mm512_moveldup_ps(w), wi=_mm512_movehdup_ps(w);
+    return _mm512_fmaddsub_ps(a,wr,_mm512_mul_ps(_mm512_permute_ps(a,0xB1),wi));
+    }
+  template<typename Reader> static V pack_complex(Reader read)
+    {
+    const auto a=read(0),b=read(1),c=read(2),d=read(3);
+    const auto e=read(4),f=read(5),g=read(6),h=read(7);
+    return _mm512_setr_ps(a.r,a.i,b.r,b.i,c.r,c.i,d.r,d.i,e.r,e.i,f.r,f.i,g.r,g.i,h.r,h.i);
+    }
+  };
+
+template<> struct avx512_complex_ops<double>
+  {
+  using V = __m512d;
+  using Mask = __mmask8;
+  static constexpr size_t ncomplex=4;
+  static Mask mask(size_t n) { return Mask((1u << (2*n))-1u); }
+  static V masked_load(const void *p, Mask m)
+    { return _mm512_maskz_loadu_pd(m,p); }
+  static void masked_store(void *p, Mask m, V x)
+    { _mm512_mask_storeu_pd(p,m,x); }
+  static V set(double x) { return _mm512_set1_pd(x); }
+  static V add(V a, V b) { return _mm512_add_pd(a,b); }
+  static V mul(V a, V b) { return _mm512_mul_pd(a,b); }
+  static V fmadd(V a, V b, V c) { return _mm512_fmadd_pd(a,b,c); }
+  static V signed_swap(V x, double w)
+    {
+    const auto s=_mm512_permute_pd(x,0x55);
+    return mul(s,_mm512_mask_blend_pd(0xAA,set(-w),set(w)));
+    }
+  static V load(const void *p) { return _mm512_loadu_pd(p); }
+  static void store(void *p, V x) { _mm512_storeu_pd(p,x); }
+  static V sub(V a, V b) { return _mm512_sub_pd(a,b); }
+  static V constant(double r, double i)
+    { return _mm512_setr_pd(r,i,r,i,r,i,r,i); }
+  template<bool fwd> static V rot90(V x)
+    {
+    const auto y=_mm512_permute_pd(x,0x55);
+    const auto sign=fwd
+      ? _mm512_setr_pd(0.,-0.,0.,-0.,0.,-0.,0.,-0.)
+      : _mm512_setr_pd(-0.,0.,-0.,0.,-0.,0.,-0.,0.);
+    return _mm512_castsi512_pd(_mm512_xor_si512(
+      _mm512_castpd_si512(y),_mm512_castpd_si512(sign)));
+    }
+  static V cmul(V a, V w)
+    {
+    const auto wr=_mm512_movedup_pd(w), wi=_mm512_permute_pd(w,0xFF);
+    return _mm512_fmaddsub_pd(a,wr,_mm512_mul_pd(_mm512_permute_pd(a,0x55),wi));
+    }
+  template<typename Reader> static V pack_complex(Reader read)
+    {
+    const auto a=read(0),b=read(1),c=read(2),d=read(3);
+    return _mm512_setr_pd(a.r,a.i,b.r,b.i,c.r,c.i,d.r,d.i);
+    }
+  };
+#endif
+} // namespace detail_simd
+} // namespace DUCC0_NAMESPACE
+
 #endif
