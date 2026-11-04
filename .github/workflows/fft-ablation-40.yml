@@ -1,0 +1,141 @@
+name: DUCC 40-runner full-suite FFT ablation
+
+on:
+  push:
+    branches:
+      - bench/fft-ablation-40-20261104
+    paths:
+      - '.github/workflows/fft-ablation-40.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DUCC0_OPTIMIZATION: multiarch-strip
+  CMAKE_BUILD_PARALLEL_LEVEL: '2'
+  OMP_NUM_THREADS: '1'
+  OPENBLAS_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+
+jobs:
+  preflight:
+    name: Check ablation scripts and isolated commits
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate Python scripts and independent source trees
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m py_compile \
+            python/demos/fft_40runner_matrix.py \
+            python/demos/fft_ablation_40_runner.py \
+            python/demos/fft_ablation_40_summary.py
+          python - <<'PY'
+          import importlib.util
+          import subprocess
+          spec = importlib.util.spec_from_file_location(
+              "ablation", "python/demos/fft_ablation_40_runner.py")
+          mod = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          assert len(mod.VERSIONS) == 6
+          assert len(mod.PROFILES) == 13
+          assert len(mod.SUITES) == 8
+          for name, sha in mod.VERSIONS.items():
+              subprocess.run(["git", "cat-file", "-e", sha + "^{commit}"],
+                             check=True)
+              print(name, sha)
+          PY
+
+  benchmark:
+    name: Full FFT ablation runner ${{ matrix.replicate }}
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 40
+      matrix:
+        replicate: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+                    11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                    21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+                    31, 32, 33, 34, 35, 36, 37, 38, 39, 40]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Record physical CPU and available ISA
+        shell: bash
+        run: |
+          set -euxo pipefail
+          lscpu
+          grep -m1 '^model name' /proc/cpuinfo || true
+          grep -m1 '^flags' /proc/cpuinfo || true
+      - name: Install native build and benchmark prerequisites
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install 'scikit-build-core<1.1' \
+            'pybind11>=2.13.6' cmake ninja numpy scipy pytest
+      - name: Build six source trees and run all suites for each ISA
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python python/demos/fft_ablation_40_runner.py \
+            --replicate '${{ matrix.replicate }}' \
+            --output 'results/runner-${{ matrix.replicate }}'
+      - name: Upload all source builds correctness and timing samples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fft-ablation-40-runner-${{ matrix.replicate }}
+          path: results/
+          if-no-files-found: warn
+          retention-days: 30
+
+  summarize:
+    name: Per-CPU FFT ablation speedups and fast-cluster analysis
+    needs: [preflight, benchmark]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fft-ablation-40-runner-*
+          path: downloaded
+          merge-multiple: false
+      - name: Analyze paired source/ISA speedups by CPU and FFT family
+        shell: bash
+        run: |
+          set +e
+          python python/demos/fft_ablation_40_summary.py \
+            --root downloaded --output report --expected-shards 40
+          result=$?
+          if [[ -f report/report.md ]]; then
+            cat report/report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$result"
+      - name: Upload grouped report and per-case speedup CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fft-ablation-40-cpu-speedups
+          path: report/
+          if-no-files-found: warn
+          retention-days: 30
