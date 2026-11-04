@@ -1542,6 +1542,19 @@ template<typename T> DUCC0_NOINLINE void c2c(const cfmav<complex<T>> &in,
         return;
         }
     }
+  // Use the existing intra8 plan for contiguous long rank-1 complex64.
+  // Rank-1 Bailey takes precedence where its factorization is suitable.
+  if constexpr(is_same_v<T,float> && simd_exists<T,8>)
+    {
+    if ((in.ndim()==1) && (axes.size()==1) && (axes[0]==0)
+        && (in.shape(0)>=65536) && ((in.shape(0)&7)==0)
+        && (in.stride(0)==1) && (out.stride(0)==1))
+      {
+      general_nd<pocketfft_c_intra8<T>>(in2, out2, axes, fct, nthreads,
+        ExecC2C{forward});
+      return;
+      }
+    }
   general_nd<pocketfft_c<T>>(in2, out2, axes, fct, nthreads, ExecC2C{forward});
   }
 
