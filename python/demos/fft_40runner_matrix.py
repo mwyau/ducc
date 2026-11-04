@@ -290,7 +290,8 @@ def measure(case, samples, target_ms):
     if ref is not None:
         error = float(np.linalg.norm(out - ref) /
                       max(1.0e-200, np.linalg.norm(ref)))
-        tolerance = 8e-5 if np.dtype(case["dtype"]).itemsize <= 8 else 2e-11
+        tolerance = (8e-5 if case["dtype"] in ("float32", "complex64")
+                     else 2e-11)
         if error > tolerance:
             raise AssertionError(f"relative error {error:.3g} > {tolerance}")
     for _ in range(2):
