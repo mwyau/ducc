@@ -269,7 +269,7 @@ def prepare(case):
         def run():
             return f(input_array, axes=axes, out=out, nthreads=threads)
     elif kind == "convolve_axis":
-        kernel_shape = (min(11, shape[axes[0]]),)
+        kernel_shape = (shape[axes[0]],)
         kernel = make_array(kernel_shape, case["dtype"], "C", rng)
         def run():
             return fft.convolve_axis(input_array, out, axes[0], kernel,
