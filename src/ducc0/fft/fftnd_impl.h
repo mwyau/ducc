@@ -661,8 +661,14 @@ DUCC0_NOINLINE void general_nd(const cfmav<T> &in, const vfmav<T> &out,
   {
   if ((in.ndim()==1)&&(in.stride(0)==1)&&(out.stride(0)==1))
     {
+#ifdef DUCC0_NO_FFT_CACHE
+    // Cache-free contiguous 1D execution needs only local plan ownership.
+    Tplan plan(in.shape(0), true);
+    exec.exec_simple(in.data(), out.data(), plan, fct, nthreads);
+#else
     auto plan = get_plan<Tplan>(in.shape(0), true);
     exec.exec_simple(in.data(), out.data(), *plan, fct, nthreads);
+#endif
     return;
     }
   shared_ptr<Tplan> plan, vplan;
