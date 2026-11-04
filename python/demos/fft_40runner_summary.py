@@ -11,11 +11,12 @@ import statistics
 
 
 COMPARISONS = (
-    ("candidate-v3", "upstream-v3", "v3 / upstream v3"),
-    ("candidate-v4", "upstream-v4", "v4 / upstream v4"),
-    ("candidate-v3", "upstream-v1", "v3 / upstream v1"),
-    ("candidate-v4", "upstream-v1", "v4 / upstream v1"),
-    ("candidate-v4", "candidate-v3", "v4 / candidate v3"),
+    ("candidate-v3", "upstream-v1", "new v3 / original v1"),
+    ("candidate-v3", "upstream-v3", "new v3 / original v3"),
+    ("candidate-v3", "upstream-v4", "new v3 / original v4"),
+    ("candidate-v4", "upstream-v1", "new v4 / original v1"),
+    ("candidate-v4", "upstream-v3", "new v4 / original v3"),
+    ("candidate-v4", "upstream-v4", "new v4 / original v4"),
 )
 SUITES = ("1d", "batched", "strided", "nd", "long",
           "real", "r2r", "convolution")
@@ -136,15 +137,20 @@ def fmt_case(row):
 
 def generate_report(summary, coverage, issues, expected_shards):
     lines = [
-        "# DUCC FFT cross-ISA benchmark",
+        "# DUCC FFT speedups against original v1, v3, and v4",
         "",
-        "Timing ratios are paired **within the same runner**; no samples from "
-        "different CPUs are divided. Cases are aggregated by median "
-        "regression across available shard replicates.",
+        "**Speedup = original execution time / new execution time.** "
+        "1.20x means 20% faster, 1.00x means parity, and 0.80x means "
+        "the candidate takes 25% longer.",
         "",
-        "**Regression % = 100 × (candidate time / reference time − 1)**. "
-        "A positive value is slower; a negative value is faster. "
-        "Speedup = reference time / candidate time.",
+        "All timings are paired within one physical runner. Repeated "
+        "measurements of a case on the same CPU are reduced by their median "
+        "speedup; category medians then weight distinct cases equally. "
+        "Missing v4 configurations are shown as unavailable, not zero.",
+        "",
+        "The six columns compare the new candidate v3 and v4 independently "
+        "with the three original upstream PSABI levels v1, v3, and v4. "
+        "Cross-ISA comparisons remain on the same physical CPU.",
         "",
         f"Observed matrix shards: **{len(coverage)}/{expected_shards}**.",
         "",
@@ -158,8 +164,11 @@ def generate_report(summary, coverage, issues, expected_shards):
     if missing_shards:
         issues.append(f"missing shards: {missing_shards}")
     if issues:
-        lines += ["## Validation issues", ""]
-        lines += [f"- {issue}" for issue in issues[:100]]
+        lines += [f"## Validation issues ({len(issues)})", ""]
+        lines += [f"- {issue}" for issue in issues[:3]]
+        if len(issues) > 3:
+            lines += [f"- ... {len(issues) - 3} additional issues; "
+                      "see coverage.json for complete details."]
         lines.append("")
     cpu_groups = sorted({(r["cpu_model"], r["cpu_isa"]) for r in summary})
     lines += ["## Hardware coverage", "",
@@ -173,8 +182,47 @@ def generate_report(summary, coverage, issues, expected_shards):
     lines += ["", "A v4 result is recorded only if the runner actually "
               "supports AVX-512 and confirms active PSABI level 4. "
               "AVX2-only runners are included in all v1/v3 comparisons.", ""]
+    lines += ["## CPU × FFT category × precision: median speedups", "",
+              "Every cell is a median of distinct benchmark cases on that "
+              "CPU/ISA. The comparison column represents an independent "
+              "build of original upstream. — means no supported data.", ""]
+    columns = ["Category", "Precision", "Cases"] + [
+        label for _, _, label in COMPARISONS] + [
+        "v3 cases >20% slower", "v4 cases >20% slower"]
     for model, isa in cpu_groups:
-        lines += [f"## {model} — {isa}", ""]
+        lines += [f"### {model} — {isa}", "",
+                  "| " + " | ".join(columns) + " |",
+                  "| " + " | ".join(["---"] * len(columns)) + " |"]
+        for suite in SUITES:
+            for precision in ("single", "double"):
+                subset = [r for r in summary if r["cpu_model"] == model and
+                          r["cpu_isa"] == isa and r["suite"] == suite and
+                          r["precision"] == precision]
+                if not subset:
+                    continue
+                controls = [r for r in subset if
+                            r["comparison"] == "new v3 / original v3"]
+                n_cases = len(controls)
+                values = []
+                for _, _, label in COMPARISONS:
+                    timings = [r["speedup"] for r in subset if
+                               r["comparison"] == label]
+                    values.append(f"{median(timings):.2f}x" if timings
+                                  else "—")
+                v3bad = sum(r["regression_percent"] > 20 for r in controls)
+                v4controls = [r for r in subset if
+                              r["comparison"] == "new v4 / original v4"]
+                v4bad = sum(r["regression_percent"] > 20
+                            for r in v4controls)
+                lines.append("| " + " | ".join(
+                    [suite, precision, str(n_cases)] + values +
+                    [f"{v3bad}/{n_cases}" if controls else "—",
+                     f"{v4bad}/{len(v4controls)}" if v4controls
+                     else "—"]) + " |")
+        lines += [""]
+    lines += ["## Transform-family detail per CPU and precision", ""]
+    for model, isa in cpu_groups:
+        lines += [f"### {model} — {isa}", ""]
         for precision in ("single", "double"):
             rows_p = [r for r in summary if r["cpu_model"] == model and
                       r["cpu_isa"] == isa and r["precision"] == precision]
@@ -207,7 +255,7 @@ def generate_report(summary, coverage, issues, expected_shards):
                     lines.append("")
                     # Worst-case examples use same-ISA controls first.
                     primary = [r for r in local if r["comparison"] in (
-                        "v3 / upstream v3", "v4 / upstream v4")]
+                        "new v3 / original v3", "new v4 / original v4")]
                     worst = sorted(primary, key=lambda r:
                                    r["regression_percent"], reverse=True)[:5]
                     if worst:
@@ -224,11 +272,13 @@ def generate_report(summary, coverage, issues, expected_shards):
     if not cpu_groups:
         lines += ["No paired benchmark measurements available.", ""]
     lines += ["## Interpretation", "",
-              "The 10–20% regression objective is a policy target, not a "
-              "claim of compliance. Prioritize repeated same-ISA regressions "
-              "above 20%, then inspect the worst cases per FFT family. "
-              "Differences across CPU models cannot be used as paired "
-              "speedups.", ""]
+              "Speedups against original v1 include improvements already "
+              "present in the original v3/v4 branches. Use new-v3 versus "
+              "original-v3 and new-v4 versus original-v4 to isolate the "
+              "candidate changes at a fixed ISA. The 10–20% worst-case "
+              "regression target is not satisfied merely by a favorable "
+              "category median: inspect repeatable individual slowdowns. "
+              "Do not divide timings from different CPU models.", ""]
     return "\n".join(lines) + "\n"
 
 
