@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""One independently paired, full-suite DUCC FFT ablation runner.
+"""All-suite paired FFT benchmark of a strided-tail scheduler fix.
 
-Every runner builds the original and all isolated/full sources, runs their
-supported v1/v3/v4 profiles, and samples ALL FFT families. Profile order
-rotates with runner and suite, preventing systematic last-profile drift.
+Each runner builds pinned upstream, unchanged avx-512-improvements and the
+strided-tail fix; executes upstream v1/v3/v4 and both candidate v3/v4
+profiles; and runs ALL eight FFT families with eleven timing samples.
 """
 from __future__ import annotations
 
@@ -19,21 +19,16 @@ import traceback
 BASE = "757145c328d4680fc23bf37e372860fa49c4d8b5"
 VERSIONS = {
     "upstream": BASE,
-    "lanes": "69aa1c1f5d2dbf3bd94915ee5aa9746cc179c44a",
-    "scalar": "186b11d67e373192db7993560d163ecc93c7d41c",
-    "nocache": "40b00a50007398be8a2a4e96922bf11125c5b87c",
-    "long": "1f0b78a5309cce83325e087c4ecdd25c90db2dd1",
-    "full": "63613dd691ecb90d2a58c225b6703badf6a8f293",
+    "original": "63613dd691ecb90d2a58c225b6703badf6a8f293",
+    "fixed": "3714de1c907616a0f787f3a9551bbe0d63222485",
 }
 SUITES = ("1d", "batched", "strided", "nd", "long", "real",
           "r2r", "convolution")
 PROFILES = (
     ("upstream", 1), ("upstream", 3), ("upstream", 4),
-    ("lanes", 3), ("lanes", 4), ("scalar", 3), ("scalar", 4),
-    ("nocache", 3), ("nocache", 4), ("long", 3), ("long", 4),
-    ("full", 3), ("full", 4),
+    ("original", 3), ("original", 4),
+    ("fixed", 3), ("fixed", 4),
 )
-
 
 def run(cmd, *, env=None, log=None, check=True):
     start = time.monotonic()
@@ -103,10 +98,9 @@ def main():
     (output / "versions.json").write_text(json.dumps(
         dict(replicate=args.replicate, versions=VERSIONS,
              suites=SUITES, profiles=PROFILES,
-             nocache_build_flag="-DDUCC0_NO_FFT_CACHE",
              optimization=os.environ.get("DUCC0_OPTIMIZATION"),
-             note="The full candidate is built with default FFT cache; "
-                  "only the isolated no-cache configuration opts out."),
+             note="All three independently built sources use identical "
+                  "default cache settings and multiarch-strip flags."),
         indent=2) + "\n")
     fail = []
     for variant, sha in VERSIONS.items():
@@ -119,12 +113,8 @@ def main():
         run(["git", "worktree", "add", "--detach", str(src), sha],
             log=build_log_dir / f"{variant}-checkout.txt")
         build_env = os.environ.copy()
-        if variant == "nocache":
-            build_env["CXXFLAGS"] = (
-                build_env.get("CXXFLAGS", "") +
-                " -DDUCC0_NO_FFT_CACHE").strip()
-        else:
-            build_env.pop("CXXFLAGS", None)
+        # Match compiler options across the three independently built sources.
+        build_env.pop("CXXFLAGS", None)
         run([sys.executable, "-m", "pip", "wheel",
              "--no-build-isolation", "--no-cache-dir", "--no-deps",
              "-C", f"build-dir={root / 'builds' / variant}",
@@ -199,7 +189,8 @@ def main():
     if fail:
         raise SystemExit(f"{len(fail)} failed commands: " +
                          ", ".join(fail[:15]))
-    print("Completed ALL FFT suites; 11 repeated samples per case.",
+    print("Completed all eight FFT suites across three pinned source builds "
+          "and 11 samples per case.",
           flush=True)
 
 
