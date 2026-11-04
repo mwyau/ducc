@@ -455,3 +455,24 @@ def test_inplace_r2c_c2r(shp):
     fft.r2c(bufr, out=buf)
     fft.c2r(buf, out=bufr,inorm=2, lastsize=shp[-1], forward=False)
     _assert_close(ref, bufr, 1e-12)
+
+@pmp("dtype,n", ((np.complex64, 32768), (np.complex64, 65528),
+                 (np.complex64, 65536), (np.complex64, 131072),
+                 (np.complex128, 65528),
+                 (np.complex128, 65536), (np.complex128, 131072)))
+@pmp("batch", (2, 8))
+@pmp("forward", (True, False))
+@pmp("inplace", (True, False))
+def test_c2c_long_contiguous_batches(dtype, n, batch, forward, inplace):
+    """Check both sides of the within-FFT crossover, including in-place FFTs."""
+    rng = np.random.default_rng(8317 + n + batch)
+    src = (rng.standard_normal((batch, n))
+           + 1j * rng.standard_normal((batch, n))).astype(dtype)
+    expected = (np.fft.fft(src, axis=1) if forward
+                else np.fft.ifft(src, axis=1) * n)
+    out = src.copy() if inplace else np.empty_like(src)
+    result = fft.c2c(out if inplace else src, out=out, axes=(1,),
+                     forward=forward, nthreads=1)
+    assert result is out
+    relerr = np.linalg.norm(out - expected) / np.linalg.norm(expected)
+    assert relerr < (2e-5 if dtype == np.complex64 else 2e-12)

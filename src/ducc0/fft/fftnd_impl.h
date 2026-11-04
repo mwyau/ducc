@@ -1437,12 +1437,46 @@ template<typename T> class Long1dPlan: public UnityRoots<T,complex<T>>
       : UnityRoots<T,complex<T>>(length) {}
   };
 
+// Cache the opt-in eight-wide plan separately from ordinary four-wide plans.
+template<typename T> class pocketfft_c_intra8: public pocketfft_c<T>
+  {
+  public:
+    explicit pocketfft_c_intra8(size_t len, bool)
+      : pocketfft_c<T>(len, true, 8) {}
+  };
+
 template<typename T> DUCC0_NOINLINE void c2c(const cfmav<complex<T>> &in,
   const vfmav<complex<T>> &out, const shape_t &axes, bool forward,
   T fct, size_t nthreads)
   {
   util::sanity_check_onetype(in, out, in.data()==out.data(), axes);
   if (in.size()==0) return;
+
+  // For long, contiguous batched 1D complex FFTs, use SIMD within each
+  // transform rather than across transforms. Only enter when eight-wide
+  // SIMD is supported; unsupported architectures retain the L2 scheduler.
+  if constexpr(simd_exists<T,8>)
+    {
+    if ((in.ndim()==2) && (axes.size()==1) && (axes[0]==1)
+        && (in.shape(0)>=2) && (in.shape(0)<=8)
+        && (in.shape(1)>=65536) && ((in.shape(1)&7)==0)
+        && (in.stride(1)==1) && (out.stride(1)==1)
+        && (in.stride(0)==ptrdiff_t(in.shape(1)))
+        && (out.stride(0)==ptrdiff_t(out.shape(1))))
+      {
+      const size_t len=in.shape(1);
+      auto plan=get_plan<pocketfft_c_intra8<T>>(len,true);
+      const auto *src=reinterpret_cast<const Cmplx<T> *>(in.data());
+      auto *dst=reinterpret_cast<Cmplx<T> *>(out.data());
+      execStatic(in.shape(0), nthreads, 0, [&](Scheduler &sched)
+        {
+        while (auto rng=sched.getNext())
+          for (size_t i=rng.lo; i<rng.hi; ++i)
+            ExecC2C{forward}.exec_simple(src+i*len, dst+i*len, *plan, fct, 1);
+        });
+      return;
+      }
+    }
 
   // special treatment for long 1D transforms (Bailey's algorithm)
   // TODO:
