@@ -1452,31 +1452,34 @@ template<typename T> DUCC0_NOINLINE void c2c(const cfmav<complex<T>> &in,
   util::sanity_check_onetype(in, out, in.data()==out.data(), axes);
   if (in.size()==0) return;
 
-  // For long, contiguous batched complex FFTs, use SIMD within each
-  // transform. The batch count has no fixed upper bound above 131072.
+  // Use eight-wide SIMD within long contiguous FFT batches, keeping the
+  // original L2 scheduler for large multithreaded complex128 transforms.
   if constexpr(simd_exists<T,8>)
     {
-    if ((in.ndim()==2) && (axes.size()==1) && (axes[0]==1)
-        && (in.shape(0)>=2) && (in.shape(1)>=65536)
-        && ((in.shape(0)<=8) || (in.shape(1)>=131072))
-        // Retain the L2 scheduler for large multithreaded double FFTs.
-        && (is_same_v<T,float> || (nthreads==1)
-            || (in.shape(1)<262144)) && ((in.shape(1)&7)==0)
-        && (in.stride(1)==1) && (out.stride(1)==1)
-        && (in.stride(0)==ptrdiff_t(in.shape(1)))
-        && (out.stride(0)==ptrdiff_t(out.shape(1))))
+    if ((in.ndim()==2) && (axes.size()==1) && (axes[0]==1))
       {
-      const size_t len=in.shape(1);
-      auto plan=get_plan<pocketfft_c_intra8<T>>(len,true);
-      const auto *src=reinterpret_cast<const Cmplx<T> *>(in.data());
-      auto *dst=reinterpret_cast<Cmplx<T> *>(out.data());
-      execStatic(in.shape(0), nthreads, 0, [&](Scheduler &sched)
+      const size_t batch=in.shape(0), len=in.shape(1);
+      const bool use_intra8 =
+        (batch>=2) && (((batch<=8) && (len>=65536)) || (len>=131072))
+        && ((len&7)==0)
+        && (is_same_v<T,float> || (nthreads==1) || (len<262144))
+        && (in.stride(1)==1) && (out.stride(1)==1)
+        && (in.stride(0)==ptrdiff_t(len))
+        && (out.stride(0)==ptrdiff_t(len));
+      if (use_intra8)
         {
-        while (auto rng=sched.getNext())
-          for (size_t i=rng.lo; i<rng.hi; ++i)
-            ExecC2C{forward}.exec_simple(src+i*len, dst+i*len, *plan, fct, 1);
-        });
-      return;
+        auto plan=get_plan<pocketfft_c_intra8<T>>(len,true);
+        const auto *src=reinterpret_cast<const Cmplx<T> *>(in.data());
+        auto *dst=reinterpret_cast<Cmplx<T> *>(out.data());
+        execStatic(batch, nthreads, 0, [&](Scheduler &sched)
+          {
+          while (auto rng=sched.getNext())
+            for (size_t i=rng.lo; i<rng.hi; ++i)
+              ExecC2C{forward}.exec_simple(src+i*len, dst+i*len,
+                *plan, fct, 1);
+          });
+        return;
+        }
       }
     }
 
