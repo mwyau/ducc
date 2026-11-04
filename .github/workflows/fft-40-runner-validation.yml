@@ -1,0 +1,226 @@
+name: DUCC full FFT 40-runner cross-ISA benchmark
+
+on:
+  push:
+    branches:
+      - bench/fft-full-matrix-40-20261104
+    paths:
+      - '.github/workflows/fft-40-runner-validation.yml'
+      - 'python/demos/fft_40runner_matrix.py'
+      - 'python/demos/fft_40runner_summary.py'
+      - 'src/ducc0/fft/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BASE_SHA: '757145c328d4680fc23bf37e372860fa49c4d8b5'
+  DUCC0_OPTIMIZATION: multiarch-strip
+  CMAKE_BUILD_PARALLEL_LEVEL: '2'
+  OMP_NUM_THREADS: '1'
+  OPENBLAS_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+
+jobs:
+  preflight:
+    name: Verify source and benchmark scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate benchmark source, base SHA and branch ancestry
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m py_compile python/demos/fft_40runner_matrix.py python/demos/fft_40runner_summary.py
+          git cat-file -e "$BASE_SHA^{commit}"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          git show -s --format='candidate commit: %H %s' HEAD
+          git show -s --format='upstream commit: %H %s' "$BASE_SHA"
+
+  benchmark:
+    name: FFT ${{ matrix.suite }} / replicate ${{ matrix.replicate }}
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 40
+      matrix:
+        suite: [1d, batched, strided, nd, long, real, r2r, convolution]
+        replicate: [1, 2, 3, 4, 5]
+    env:
+      SUITE: ${{ matrix.suite }}
+      REPLICATE: ${{ matrix.replicate }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Record CPU, ISA, runner and source pins
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p results
+          suites=(1d batched strided nd long real r2r convolution)
+          index=0
+          for i in "${!suites[@]}"; do
+            if [[ "${suites[$i]}" == "$SUITE" ]]; then index="$i"; break; fi
+          done
+          shard=$((index*5+REPLICATE-1))
+          echo "SHARD=$shard" >> "$GITHUB_ENV"
+          echo "CANDIDATE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "suite=$SUITE replicate=$REPLICATE shard=$shard"
+          lscpu || true
+          grep -m1 '^model name' /proc/cpuinfo || true
+          grep -m1 '^flags' /proc/cpuinfo || true
+          git rev-parse HEAD
+          git rev-parse "$BASE_SHA"
+      - name: Install Python and C++ build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install 'scikit-build-core<1.1' 'pybind11>=2.13.6' cmake ninja numpy scipy pytest
+      - name: Build independent multiarch candidate and upstream wheels
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export BASE_SOURCE="$RUNNER_TEMP/ducc0-base-source"
+          export WHEEL_ROOT="$RUNNER_TEMP/ducc0-wheels"
+          export INSTALL_ROOT="$RUNNER_TEMP/ducc0-installed"
+          mkdir -p "$WHEEL_ROOT/candidate" "$WHEEL_ROOT/upstream" \
+            "$INSTALL_ROOT/candidate" "$INSTALL_ROOT/upstream" \
+            "$RUNNER_TEMP/ducc0-build"
+          git worktree add --detach "$BASE_SOURCE" "$BASE_SHA"
+          python -m pip wheel --no-build-isolation --no-cache-dir --no-deps \
+            -C "build-dir=$RUNNER_TEMP/ducc0-build/candidate" \
+            -w "$WHEEL_ROOT/candidate" "$GITHUB_WORKSPACE"
+          python -m pip wheel --no-build-isolation --no-cache-dir --no-deps \
+            -C "build-dir=$RUNNER_TEMP/ducc0-build/upstream" \
+            -w "$WHEEL_ROOT/upstream" "$BASE_SOURCE"
+          python -m pip install --no-deps --no-cache-dir \
+            --target "$INSTALL_ROOT/candidate" "$WHEEL_ROOT/candidate"/ducc0-*.whl
+          python -m pip install --no-deps --no-cache-dir \
+            --target "$INSTALL_ROOT/upstream" "$WHEEL_ROOT/upstream"/ducc0-*.whl
+          echo "BASE_SOURCE=$BASE_SOURCE" >> "$GITHUB_ENV"
+          echo "INSTALL_ROOT=$INSTALL_ROOT" >> "$GITHUB_ENV"
+      - name: Discover usable CPU profiles with independent wheel imports
+        shell: bash
+        run: |
+          set -euxo pipefail
+          candidate_max="$(env -u DUCC0_MAX_PSABI_LEVEL \
+            PYTHONPATH="$INSTALL_ROOT/candidate" python -c \
+            'import ducc0; print(ducc0.misc.psabi_level())')"
+          upstream_max="$(env -u DUCC0_MAX_PSABI_LEVEL \
+            PYTHONPATH="$INSTALL_ROOT/upstream" python -c \
+            'import ducc0; print(ducc0.misc.psabi_level())')"
+          (( candidate_max >= 3 && upstream_max >= 3 ))
+          if (( candidate_max < upstream_max )); then
+            max_usable="$candidate_max"
+          else
+            max_usable="$upstream_max"
+          fi
+          echo "MAX_USABLE_LEVEL=$max_usable" >> "$GITHUB_ENV"
+          echo "Candidate maximum: v$candidate_max; upstream maximum: v$upstream_max"
+          mkdir -p "results/$SUITE-r$REPLICATE"
+          printf 'candidate=%s upstream=%s effective=%s\n' \
+            "$candidate_max" "$upstream_max" "$max_usable" \
+            > "results/$SUITE-r$REPLICATE/isa.txt"
+      - name: Run correctness tests and paired FFT benchmarks
+        shell: bash
+        run: |
+          set -euxo pipefail
+          original_pythonpath="${PYTHONPATH:-}"
+          root="results/$SUITE-r$REPLICATE"
+          for spec in candidate:3 candidate:4 upstream:1 upstream:3 upstream:4; do
+            variant="${spec%%:*}"
+            level="${spec##*:}"
+            profile="$variant-v$level"
+            out="$root/$profile"
+            mkdir -p "$out"
+            if (( level > MAX_USABLE_LEVEL )); then
+              echo "SKIPPED $profile: CPU max v$MAX_USABLE_LEVEL" | tee "$out/skip.txt"
+              continue
+            fi
+            target="$INSTALL_ROOT/$variant"
+            export DUCC0_MAX_PSABI_LEVEL="$level"
+            export DUCC_EXPECTED_INSTALL="$target"
+            export PYTHONPATH="$target${original_pythonpath:+:$original_pythonpath}"
+            if [[ "$variant" == candidate ]]; then
+              export DUCC_SOURCE_SHA="$CANDIDATE_SHA"
+              testfile="$GITHUB_WORKSPACE/python/test/test_fft.py"
+            else
+              export DUCC_SOURCE_SHA="$BASE_SHA"
+              testfile="$BASE_SOURCE/python/test/test_fft.py"
+            fi
+            python - <<'PY' 2>&1 | tee "$out/import.txt"
+          import ducc0
+          import os
+          from pathlib import Path
+          expected = int(os.environ["DUCC0_MAX_PSABI_LEVEL"])
+          actual = ducc0.misc.psabi_level()
+          module = Path(ducc0.__file__).resolve()
+          assert actual == expected, (expected, actual)
+          assert module.is_relative_to(Path(os.environ["DUCC_EXPECTED_INSTALL"]).resolve())
+          print("profile", expected, "module", module, "wrapper", ducc0.__wrapper__)
+          PY
+            python -m pytest "$testfile" -q -x 2>&1 | tee "$out/correctness.txt"
+            python "$GITHUB_WORKSPACE/python/demos/fft_40runner_matrix.py" \
+              --suite "$SUITE" --profile "$profile" \
+              --replicate "$REPLICATE" --shard "$SHARD" \
+              --samples 7 --target-ms 5 \
+              --output "$out" 2>&1 | tee "$out/benchmark.txt"
+          done
+      - name: Upload per-runner benchmark and validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fft-40-${{ matrix.suite }}-r${{ matrix.replicate }}
+          path: results/
+          if-no-files-found: warn
+          retention-days: 30
+
+  aggregate:
+    name: Group CPU/precision/FFT regressions
+    if: always()
+    needs: [preflight, benchmark]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fft-40-*
+          path: downloaded
+          merge-multiple: false
+      - name: Build CPU-grouped performance report
+        shell: bash
+        run: |
+          set +e
+          python python/demos/fft_40runner_summary.py \
+            --root downloaded --output report --expected-shards 40
+          exit_code=$?
+          if [[ -f report/summary.md ]]; then
+            cat report/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$exit_code"
+      - name: Upload grouped summary and paired case-level CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fft-40-cpu-precision-summary
+          path: report/
+          if-no-files-found: warn
+          retention-days: 30
