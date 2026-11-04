@@ -772,9 +772,6 @@ DUCC0_NOINLINE void general_nd(const cfmav<T> &in, const vfmav<T> &out,
                 exec.exec_n(it, tin, out, storage2, *plan, fct, n_bunch/lvlen, nth1d);
                 }
               }
-            }
-          if (n_simul>=lvlen)
-            {
             if (it.remaining()>=lvlen)
               {
               TmpStorage2<add_vec_t<T, lvlen>,T,T0> storage2(storage);
@@ -801,9 +798,6 @@ DUCC0_NOINLINE void general_nd(const cfmav<T> &in, const vfmav<T> &out,
                 exec.exec_n(it, tin, out, storage2, *plan, fct, n_bunch/lvlen, nth1d);
                 }
               }
-            }
-          if (n_simul>=lvlen)
-            {
             if (it.remaining()>=lvlen)
               {
               TmpStorage2<add_vec_t<T, lvlen>,T,T0> storage2(storage);
@@ -830,9 +824,6 @@ DUCC0_NOINLINE void general_nd(const cfmav<T> &in, const vfmav<T> &out,
                 exec.exec_n(it, tin, out, storage2, *plan, fct, n_bunch/lvlen, nth1d);
                 }
               }
-            }
-          if (n_simul>=lvlen)
-            {
             if (it.remaining()>=lvlen)
               {
               TmpStorage2<add_vec_t<T, lvlen>,T,T0> storage2(storage);
@@ -1458,14 +1449,15 @@ template<typename T> DUCC0_NOINLINE void c2c(const cfmav<complex<T>> &in,
     if ((in.ndim()==2) && (axes.size()==1) && (axes[0]==1))
       {
       const size_t batch=in.shape(0), len=in.shape(1);
-      const bool use_intra8 =
-        (batch>=2) && (((batch<=8) && (len>=65536)) || (len>=131072))
-        && ((len&7)==0)
-        && (is_same_v<T,float> || (nthreads==1) || (len<262144))
-        && (in.stride(1)==1) && (out.stride(1)==1)
+      const bool large_batch = (len>=131072) ||
+        ((batch<=8) && (len>=65536));
+      const bool contiguous = (in.stride(1)==1) && (out.stride(1)==1)
         && (in.stride(0)==ptrdiff_t(len))
         && (out.stride(0)==ptrdiff_t(len));
-      if (use_intra8)
+      const bool threading_ok = is_same_v<T,float> || (nthreads==1)
+        || (len<262144);
+      if ((batch>=2) && large_batch && ((len&7)==0)
+          && contiguous && threading_ok)
         {
         auto plan=get_plan<pocketfft_c_intra8<T>>(len,true);
         const auto *src=reinterpret_cast<const Cmplx<T> *>(in.data());
