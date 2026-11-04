@@ -1426,12 +1426,51 @@ template<typename T> class Long1dPlan: public UnityRoots<T,complex<T>>
       : UnityRoots<T,complex<T>>(length) {}
   };
 
+// Cache the opt-in eight-wide plan separately from ordinary four-wide plans.
+template<typename T> class pocketfft_c_intra8: public pocketfft_c<T>
+  {
+  public:
+    explicit pocketfft_c_intra8(size_t len, bool)
+      : pocketfft_c<T>(len, true, 8) {}
+  };
+
 template<typename T> DUCC0_NOINLINE void c2c(const cfmav<complex<T>> &in,
   const vfmav<complex<T>> &out, const shape_t &axes, bool forward,
   T fct, size_t nthreads)
   {
   util::sanity_check_onetype(in, out, in.data()==out.data(), axes);
   if (in.size()==0) return;
+
+  // Use eight-wide SIMD within long contiguous FFT batches, keeping the
+  // original L2 scheduler for large multithreaded complex128 transforms.
+  if constexpr(simd_exists<T,8>)
+    {
+    if ((in.ndim()==2) && (axes.size()==1) && (axes[0]==1))
+      {
+      const size_t batch=in.shape(0), len=in.shape(1);
+      const bool use_intra8 =
+        (batch>=2) && (((batch<=8) && (len>=65536)) || (len>=131072))
+        && ((len&7)==0)
+        && (is_same_v<T,float> || (nthreads==1) || (len<262144))
+        && (in.stride(1)==1) && (out.stride(1)==1)
+        && (in.stride(0)==ptrdiff_t(len))
+        && (out.stride(0)==ptrdiff_t(len));
+      if (use_intra8)
+        {
+        auto plan=get_plan<pocketfft_c_intra8<T>>(len,true);
+        const auto *src=reinterpret_cast<const Cmplx<T> *>(in.data());
+        auto *dst=reinterpret_cast<Cmplx<T> *>(out.data());
+        execStatic(batch, nthreads, 0, [&](Scheduler &sched)
+          {
+          while (auto rng=sched.getNext())
+            for (size_t i=rng.lo; i<rng.hi; ++i)
+              ExecC2C{forward}.exec_simple(src+i*len, dst+i*len,
+                *plan, fct, 1);
+          });
+        return;
+        }
+      }
+    }
 
   // special treatment for long 1D transforms (Bailey's algorithm)
   // TODO:
@@ -1496,6 +1535,19 @@ template<typename T> DUCC0_NOINLINE void c2c(const cfmav<complex<T>> &in,
         general_nd<pocketfft_c<T>>(in2, out2, axes2, fct, nthreads, ExecC2C{forward});
         return;
         }
+    }
+  // Use the existing intra8 plan for contiguous long rank-1 complex64.
+  // Rank-1 Bailey takes precedence where its factorization is suitable.
+  if constexpr(is_same_v<T,float> && simd_exists<T,8>)
+    {
+    if ((in.ndim()==1) && (axes.size()==1) && (axes[0]==0)
+        && (in.shape(0)>=65536) && ((in.shape(0)&7)==0)
+        && (in.stride(0)==1) && (out.stride(0)==1))
+      {
+      general_nd<pocketfft_c_intra8<T>>(in2, out2, axes, fct, nthreads,
+        ExecC2C{forward});
+      return;
+      }
     }
   general_nd<pocketfft_c<T>>(in2, out2, axes, fct, nthreads, ExecC2C{forward});
   }

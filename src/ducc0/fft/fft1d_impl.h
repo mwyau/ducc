@@ -1738,18 +1738,19 @@ template <size_t vlen, typename Tfs> class cfftp_vecpass: public cfftpass<Tfs>
 } // unnamed namespace
 
 template<typename Tfs> Tcpass<Tfs> cfftpass<Tfs>::make_pass(size_t l1,
-  size_t ido, size_t ip, const Troots<Tfs> &roots, bool vectorize)
+  size_t ido, size_t ip, const Troots<Tfs> &roots, bool vectorize,
+  size_t intra_width)
   {
   MR_assert(ip>=1, "no zero-sized FFTs");
-  // do we have an 1D vectorizable FFT?
-  if (vectorize && (ip>300)&& (ip<=100000) && (l1==1) && (ido==1))
+  // Use four-wide internal SIMD from 256 points; eight-wide is opt-in.
+  if (vectorize && (ip>=256) && (l1==1) && (ido==1))
     {
-//    constexpr auto vlen = native_simd<Tfs>::size();
-//    if constexpr(vlen>=4)
-    constexpr auto vlen = 4;
-    if constexpr(simd_exists<Tfs,vlen>)
-      if ((ip&(vlen-1))==0)
-        return make_shared<cfftp_vecpass<vlen,Tfs>>(ip, roots);
+    if constexpr(simd_exists<Tfs,8>)
+      if ((intra_width==8) && ((ip&7)==0))
+        return make_shared<cfftp_vecpass<8,Tfs>>(ip, roots);
+    if constexpr(simd_exists<Tfs,4>)
+      if ((ip&3)==0)
+        return make_shared<cfftp_vecpass<4,Tfs>>(ip, roots);
     }
 
   if (ip==1) return make_shared<cfftp1<Tfs>>();

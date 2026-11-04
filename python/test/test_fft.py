@@ -455,3 +455,79 @@ def test_inplace_r2c_c2r(shp):
     fft.r2c(bufr, out=buf)
     fft.c2r(buf, out=bufr,inorm=2, lastsize=shp[-1], forward=False)
     _assert_close(ref, bufr, 1e-12)
+
+@pmp("dtype,n", ((np.complex64, 32768), (np.complex64, 65528),
+                 (np.complex64, 65536), (np.complex64, 131072),
+                 (np.complex128, 65528),
+                 (np.complex128, 65536), (np.complex128, 131072)))
+@pmp("batch", (2, 8))
+@pmp("forward", (True, False))
+@pmp("inplace", (True, False))
+def test_c2c_long_contiguous_batches(dtype, n, batch, forward, inplace):
+    """Check both sides of the within-FFT crossover, including in-place FFTs."""
+    rng = np.random.default_rng(8317 + n + batch)
+    src = (rng.standard_normal((batch, n))
+           + 1j * rng.standard_normal((batch, n))).astype(dtype)
+    expected = (np.fft.fft(src, axis=1) if forward
+                else np.fft.ifft(src, axis=1) * n)
+    out = src.copy() if inplace else np.empty_like(src)
+    result = fft.c2c(out if inplace else src, out=out, axes=(1,),
+                     forward=forward, nthreads=1)
+    assert result is out
+    relerr = np.linalg.norm(out - expected) / np.linalg.norm(expected)
+    assert relerr < (2e-5 if dtype == np.complex64 else 2e-12)
+
+
+@pmp("n", (256, 288, 32768, 65536, 98304, 100352, 131072))
+@pmp("forward", (True, False))
+@pmp("inplace", (True, False))
+def test_c2c_rank1_simd_complex64(n, forward, inplace):
+    rng = np.random.default_rng(2365 + n)
+    src = (rng.standard_normal(n) + 1j*rng.standard_normal(n)).astype(np.complex64)
+    expected = np.fft.fft(src) if forward else np.fft.ifft(src)*n
+    out = src.copy() if inplace else np.empty_like(src)
+    fft.c2c(out if inplace else src, out=out, forward=forward, nthreads=1)
+    error = np.linalg.norm(out-expected)/np.linalg.norm(expected)
+    assert error < 2e-5
+
+
+@pmp("n", (256, 288, 32768, 65536, 81920, 92160, 98304, 100352, 131072))
+@pmp("forward", (True, False))
+@pmp("inplace", (True, False))
+def test_c2c_rank1_simd_complex128(n, forward, inplace):
+    rng = np.random.default_rng(7341 + n)
+    src = rng.standard_normal(n) + 1j*rng.standard_normal(n)
+    expected = np.fft.fft(src) if forward else np.fft.ifft(src)*n
+    out = src.copy() if inplace else np.empty_like(src)
+    fft.c2c(out if inplace else src, out=out, forward=forward, nthreads=1)
+    error = np.linalg.norm(out-expected)/np.linalg.norm(expected)
+    assert error < 2e-12
+
+
+@pmp("batch,n", ((16, 65536), (16, 131072), (64, 131072), (128, 131072)))
+@pmp("forward", (True, False))
+@pmp("nthreads", (1, 4))
+def test_c2c_uncapped_complex64(batch, n, forward, nthreads):
+    rng = np.random.default_rng(1453 + batch + n)
+    src = (rng.standard_normal((batch, n)) +
+           1j*rng.standard_normal((batch, n))).astype(np.complex64)
+    out = fft.c2c(src, axes=(1,), forward=forward, nthreads=nthreads)
+    for row in (0, batch//2, batch-1):
+        expected = (np.fft.fft(src[row]) if forward else
+                    np.fft.ifft(src[row])*n)
+        error = np.linalg.norm(out[row]-expected)/np.linalg.norm(expected)
+        assert error < 2e-5
+
+
+@pmp("batch,n", ((16, 65536), (16, 131072), (32, 131072), (16, 262144)))
+@pmp("forward", (True, False))
+@pmp("nthreads", (1, 4))
+def test_c2c_uncapped_complex128(batch, n, forward, nthreads):
+    rng = np.random.default_rng(4871 + batch + n)
+    src = rng.standard_normal((batch, n)) + 1j*rng.standard_normal((batch, n))
+    out = fft.c2c(src, axes=(1,), forward=forward, nthreads=nthreads)
+    for row in (0, batch//2, batch-1):
+        expected = (np.fft.fft(src[row]) if forward else
+                    np.fft.ifft(src[row])*n)
+        error = np.linalg.norm(out[row]-expected)/np.linalg.norm(expected)
+        assert error < 2e-12
