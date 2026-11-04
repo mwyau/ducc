@@ -1,0 +1,37 @@
+name: Export pinned FFT sources for local GCC evaluation
+
+on:
+  push:
+    branches:
+      - experiment/strided-local-20261104
+    paths:
+      - '.github/workflows/export-strided-source.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Export exact tracked candidate and upstream trees
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p export
+          git cat-file -e 757145c328d4680fc23bf37e372860fa49c4d8b5^{commit}
+          git archive --format=tar HEAD | gzip -1 > export/candidate.tar.gz
+          git archive --format=tar 757145c328d4680fc23bf37e372860fa49c4d8b5 | gzip -1 > export/upstream.tar.gz
+          printf 'candidate=%s\nupstream=%s\n' "$(git rev-parse HEAD)" '757145c328d4680fc23bf37e372860fa49c4d8b5' > export/commits.txt
+          du -h export/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pinned-ducc-source-strided
+          path: export/
+          if-no-files-found: error
+          retention-days: 3
