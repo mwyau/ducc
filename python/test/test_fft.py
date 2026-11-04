@@ -502,3 +502,18 @@ def test_c2c_rank1_simd_complex128(n, forward, inplace):
     fft.c2c(out if inplace else src, out=out, forward=forward, nthreads=1)
     error = np.linalg.norm(out-expected)/np.linalg.norm(expected)
     assert error < 2e-12
+
+
+@pmp("batch,n", ((16, 65536), (16, 131072), (64, 131072), (128, 131072)))
+@pmp("forward", (True, False))
+@pmp("nthreads", (1, 4))
+def test_c2c_uncapped_complex64(batch, n, forward, nthreads):
+    rng = np.random.default_rng(1453 + batch + n)
+    src = (rng.standard_normal((batch, n)) +
+           1j*rng.standard_normal((batch, n))).astype(np.complex64)
+    out = fft.c2c(src, axes=(1,), forward=forward, nthreads=nthreads)
+    for row in (0, batch//2, batch-1):
+        expected = (np.fft.fft(src[row]) if forward else
+                    np.fft.ifft(src[row])*n)
+        error = np.linalg.norm(out[row]-expected)/np.linalg.norm(expected)
+        assert error < 2e-5
