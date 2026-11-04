@@ -489,3 +489,16 @@ def test_c2c_rank1_simd_complex64(n, forward, inplace):
     fft.c2c(out if inplace else src, out=out, forward=forward, nthreads=1)
     error = np.linalg.norm(out-expected)/np.linalg.norm(expected)
     assert error < 2e-5
+
+
+@pmp("n", (256, 288, 32768, 65536, 81920, 92160, 98304, 100352, 131072))
+@pmp("forward", (True, False))
+@pmp("inplace", (True, False))
+def test_c2c_rank1_simd_complex128(n, forward, inplace):
+    rng = np.random.default_rng(7341 + n)
+    src = rng.standard_normal(n) + 1j*rng.standard_normal(n)
+    expected = np.fft.fft(src) if forward else np.fft.ifft(src)*n
+    out = src.copy() if inplace else np.empty_like(src)
+    fft.c2c(out if inplace else src, out=out, forward=forward, nthreads=1)
+    error = np.linalg.norm(out-expected)/np.linalg.norm(expected)
+    assert error < 2e-12
