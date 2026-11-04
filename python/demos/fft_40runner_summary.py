@@ -32,6 +32,8 @@ def percentile(values, fraction):
     idx = (len(ordered) - 1) * fraction
     low = int(idx)
     high = min(len(ordered) - 1, low + 1)
+    if high == low:
+        return ordered[low]
     return ordered[low] * (high - idx) + ordered[high] * (idx - low)
 
 
