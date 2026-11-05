@@ -1742,14 +1742,15 @@ template<typename Tfs> Tcpass<Tfs> cfftpass<Tfs>::make_pass(size_t l1,
   size_t intra_width)
   {
   MR_assert(ip>=1, "no zero-sized FFTs");
-  // Use four-wide internal SIMD from 256 points; eight-wide is opt-in.
+  // Eight-wide internal SIMD remains opt-in for long transforms.
+  // Limit the default four-wide plan to the original 100000-point ceiling.
   if (vectorize && (ip>=256) && (l1==1) && (ido==1))
     {
     if constexpr(simd_exists<Tfs,8>)
       if ((intra_width==8) && ((ip&7)==0))
         return make_shared<cfftp_vecpass<8,Tfs>>(ip, roots);
     if constexpr(simd_exists<Tfs,4>)
-      if ((ip&3)==0)
+      if ((ip<=100000) && ((ip&3)==0))
         return make_shared<cfftp_vecpass<4,Tfs>>(ip, roots);
     }
 
