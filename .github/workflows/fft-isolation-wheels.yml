@@ -23,7 +23,7 @@ jobs:
           - name: lanes
             sha: 69aa1c1f5d2dbf3bd94915ee5aa9746cc179c44a
           - name: long
-            sha: 1f0b78a5309cce83325c90db2dd1
+            sha: 1f0b78a5309cce83325e087c4ecdd25c90db2dd1
           - name: combined
             sha: f80b987891bd34d367c414dc2f27a13e42f4cb94
     env:
