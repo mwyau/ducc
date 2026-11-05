@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare strided-tail fix, unchanged improvements and upstream by CPU/ISA.
+"""Compare one-line strided SIMD width candidate vs unchanged and upstream.
 
 Raw paired speedup is the primary estimator. Optional fast-mode selection
 is computed from upstream-v3 only; both estimates are retained to reveal
@@ -13,7 +13,7 @@ import csv
 import json
 from pathlib import Path
 
-from fft_ablation_40_summary import load, vm_clusters, med, quantile, SUITES
+from fft_ablation_40_summary import load, med, quantile, SUITES
 
 
 def compare(records, retained):
@@ -99,44 +99,41 @@ def format_case(row):
 
 
 def markdown(cases, summaries, shards, errors, modes, clusters, expected):
-    cpus = sorted({r["cpu_model"] for r in summaries})
+    cpus = sorted({(r["cpu_model"],r["cpu_isa"]) for r in summaries})
     lines = [
-        "# FFT strided-tail fix: 40-runner paired CPU/ISA benchmarks", "",
+        "# Full-width strided SIMD policy: scientific FFT A/B benchmarks", "",
         "**Speedup = reference runtime / candidate runtime.** "
         "Values above 1x mean the candidate is faster.",
         "",
-        "Sources: upstream DUCC at 757145c3, unchanged "
-        "avx-512-improvements at 63613dd6, and strided-tail "
-        "correction at 3714de1c. All builds use multiarch-strip. "
-        "Each runner executes all eight suites, with 11 timing "
-        "samples per case, using rotated profile order.",
+        "Pinned sources: upstream 757145c3; unchanged SIMD f80b9878; "
+        "strided full-width candidate 36684e01. All builds use "
+        "normal caching and multiarch-strip. Every runner covers "
+        "the same scientific cases with 11 timing samples per case "
+        "and rotated profile order.",
         "",
-        "Raw paired speedup is the primary estimate. An additional "
-        "fast-cluster estimate is included for sensitivity analysis. "
-        "Fast-mode filtering uses the original upstream-v3 reference "
-        "only, and applies the same runner selection to all variants "
-        "for a given CPU and exact case. It cannot establish that "
-        "slow modes are caused by VM scheduling.",
+        "Raw paired speedup is the primary estimate. Within-series "
+        "fast-mode speedup is a sensitivity measure. All available "
+        "runners and cases are included; no baseline-fast runner "
+        "selection is applied. CPU model and ISA are distinct groups.",
         "",
         f"Observed runner shards: **{len(shards)}/{expected}**; "
         f"consolidated comparisons: **{len(cases):,}**. "
         f"Within-series fast-mode splits: {modes}; "
-        f"across-runner upstream-v3 clusters: {len(clusters)}.",
+        f"across-runner clusters excluded from analysis: {len(clusters)}.",
         "",
         "## Hardware coverage", "",
         "| CPU | ISA | Runners represented |",
         "|---|---|---:|",
     ]
-    for cpu in cpus:
-        selected = [r for r in cases if r["cpu_model"] == cpu]
-        isa = selected[0]["cpu_isa"]
+    for cpu, isa in cpus:
+        selected = [r for r in cases if r["cpu_model"] == cpu and r["cpu_isa"] == isa]
         ids = {s for r in selected for s in r["shards"]}
         lines.append(f"| {cpu} | {isa} | {len(ids)} |")
     lines += ["", "## Direct comparison: fix versus unchanged improvements", "",
               "This is the decision-making comparison: same CPU, same ISA, "
               "same FFT case, independent source builds.", ""]
-    for cpu in cpus:
-        sub = [x for x in summaries if x["cpu_model"] == cpu and
+    for cpu, isa in cpus:
+        sub = [x for x in summaries if x["cpu_model"] == cpu and x["cpu_isa"] == isa and
                x["candidate"].startswith("fixed") and
                x["reference"].startswith("original")]
         if not sub:
@@ -162,7 +159,7 @@ def markdown(cases, summaries, shards, errors, modes, clusters, expected):
                         f"{x['worst_speedup']:.3f}x | "
                         f"{x['slower_10pct']} | {x['slower_20pct']} |")
         local = sorted(
-            [x for x in cases if x["cpu_model"] == cpu and
+            [x for x in cases if x["cpu_model"] == cpu and x["cpu_isa"] == isa and
              x["candidate"].startswith("fixed") and
              x["reference"].startswith("original")],
             key=lambda r: r["speedup"])
@@ -178,14 +175,14 @@ def markdown(cases, summaries, shards, errors, modes, clusters, expected):
     lines += ["## Both candidate branches versus upstream v1, v3, v4",
               "", "Original and fixed are compared independently against "
               "each available upstream ISA level on the same runner.", ""]
-    for cpu in cpus:
+    for cpu, isa in cpus:
         for precision in ("single", "double"):
-            sub = [x for x in summaries if x["cpu_model"] == cpu and
+            sub = [x for x in summaries if x["cpu_model"] == cpu and x["cpu_isa"] == isa and
                    x["precision"] == precision and
                    x["reference"].startswith("upstream")]
             if not sub:
                 continue
-            lines += [f"### {cpu} — {precision}", "",
+            lines += [f"### {cpu} ({isa}) — {precision}", "",
                       "| FFT | Candidate | Ref | Cases | Median speedup | "
                       "P05 speedup | >20% slower |",
                       "|---|---|---|---:|---:|---:|---:|"]
@@ -239,7 +236,7 @@ def main():
     args = p.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     records, errors, shards, modes = load(args.root)
-    retain, clusters = vm_clusters(records)
+    retain, clusters = {}, []  # No selective runner exclusion.
     cases, groups = compare(records, retain)
     missing = sorted(set(range(args.expected_shards)) - shards)
     if missing:
