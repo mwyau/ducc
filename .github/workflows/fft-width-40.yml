@@ -1,0 +1,180 @@
+name: DUCC scientific FFT 40-runner strided SIMD width comparison
+
+on:
+  push:
+    branches:
+      - bench/fft-width-40-20261105
+    paths:
+      - '.github/workflows/fft-width-40.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DUCC0_OPTIMIZATION: multiarch-strip
+  CMAKE_BUILD_PARALLEL_LEVEL: '2'
+  OMP_NUM_THREADS: '1'
+  OPENBLAS_NUM_THREADS: '1'
+  MKL_NUM_THREADS: '1'
+
+jobs:
+  preflight:
+    name: Compile candidate and run FFT correctness on multiarch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python and source validation
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m py_compile \
+            python/demos/fft_scientific_40_matrix.py \
+            python/demos/fft_width_40_runner.py \
+            python/demos/fft_ablation_40_summary.py \
+            python/demos/fft_width_40_summary.py
+          python - <<'PY'
+          import importlib.util
+          import subprocess
+          spec = importlib.util.spec_from_file_location(
+              "bench", "python/demos/fft_width_40_runner.py")
+          mod = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          assert mod.VERSIONS == {
+              "upstream": "757145c328d4680fc23bf37e372860fa49c4d8b5",
+              "original": "f80b987891bd34d367c414dc2f27a13e42f4cb94",
+              "fixed": "36684e017e6343fcab323f5d32f8357bc3b8a05c"}
+          assert len(mod.PROFILES) == 7
+          assert len(mod.SUITES) == 8
+          for name, sha in mod.VERSIONS.items():
+              subprocess.run(["git", "cat-file", "-e", sha + "^{commit}"],
+                             check=True)
+              print(name, sha)
+          PY
+          git diff --check \
+            f80b987891bd34d367c414dc2f27a13e42f4cb94 \
+            36684e017e6343fcab323f5d32f8357bc3b8a05c
+          git diff --stat \
+            f80b987891bd34d367c414dc2f27a13e42f4cb94 \
+            36684e017e6343fcab323f5d32f8357bc3b8a05c
+      - name: Install compiler and benchmark dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install 'scikit-build-core<1.1' \
+            'pybind11>=2.13.6' cmake ninja numpy scipy pytest
+      - name: Build fixed multiarch wheel and execute FFT suite
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git worktree add --detach \
+            "$RUNNER_TEMP/ducc-tail-fix" \
+            36684e017e6343fcab323f5d32f8357bc3b8a05c
+          mkdir -p "$RUNNER_TEMP/fix-wheel" "$RUNNER_TEMP/fix-installed"
+          python -m pip wheel --no-build-isolation --no-cache-dir --no-deps \
+            -C "build-dir=$RUNNER_TEMP/fix-cmake-build" \
+            -w "$RUNNER_TEMP/fix-wheel" "$RUNNER_TEMP/ducc-tail-fix"
+          python -m pip install --no-deps --target \
+            "$RUNNER_TEMP/fix-installed" "$RUNNER_TEMP"/fix-wheel/ducc0-*.whl
+          export PYTHONPATH="$RUNNER_TEMP/fix-installed"
+          export DUCC0_MAX_PSABI_LEVEL=3
+          python -m pytest "$RUNNER_TEMP/ducc-tail-fix/python/test/test_fft.py" -q -x
+          unset DUCC0_MAX_PSABI_LEVEL
+          max="$(python -c 'import ducc0; print(ducc0.misc.psabi_level())')"
+          if (( max >= 4 )); then
+            export DUCC0_MAX_PSABI_LEVEL=4
+            python -m pytest "$RUNNER_TEMP/ducc-tail-fix/python/test/test_fft.py" -q -x
+          fi
+
+  benchmark:
+    name: Full FFT tail-fix comparison runner ${{ matrix.replicate }}
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 40
+      matrix:
+        replicate: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+                    11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                    21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+                    31, 32, 33, 34, 35, 36, 37, 38, 39, 40]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Log physical CPU and SIMD capabilities
+        shell: bash
+        run: |
+          set -euxo pipefail
+          lscpu
+          grep -m1 '^model name' /proc/cpuinfo || true
+          grep -m1 '^flags' /proc/cpuinfo || true
+      - name: Install build and benchmark dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install 'scikit-build-core<1.1' \
+            'pybind11>=2.13.6' cmake ninja numpy scipy pytest
+      - name: Benchmark all FFT families and three source trees on one CPU
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python python/demos/fft_width_40_runner.py \
+            --replicate '${{ matrix.replicate }}' \
+            --output 'results/runner-${{ matrix.replicate }}'
+      - name: Upload correctness and per-case timing results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fft-width-40-runner-${{ matrix.replicate }}
+          path: results/
+          if-no-files-found: warn
+          retention-days: 30
+
+  summarize:
+    name: CPU-specific fixed/original/upstream speedups
+    needs: [preflight, benchmark]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fft-width-40-runner-*
+          path: downloaded
+          merge-multiple: false
+      - name: Aggregate same-CPU speedups, regression counts, and VM sensitivity
+        shell: bash
+        run: |
+          set +e
+          python python/demos/fft_width_40_summary.py \
+            --root downloaded --output report --expected-shards 40
+          result=$?
+          if [[ -f report/report.md ]]; then
+            cat report/report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$result"
+      - name: Upload grouped report and paired case-level CSVs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fft-width-40-cpu-speedups
+          path: report/
+          if-no-files-found: warn
+          retention-days: 30
