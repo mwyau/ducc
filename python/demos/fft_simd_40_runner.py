@@ -173,7 +173,7 @@ def main():
                 fail.append(f"import {suite} {profile}")
                 continue
             rc = run([sys.executable,
-                      str(repo / "python/demos/fft_40runner_matrix.py"),
+                      str(repo / "python/demos/fft_scientific_40_matrix.py"),
                       "--suite", suite,
                       "--profile", profile,
                       "--shard", str(args.replicate - 1),
