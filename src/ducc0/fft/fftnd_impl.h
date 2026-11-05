@@ -723,8 +723,10 @@ DUCC0_NOINLINE void general_nd(const cfmav<T> &in, const vfmav<T> &out,
         }
       else  // fairly small individual FFT, vectorizing probably beneficial
         {
-        // Avoid 16-wide AVX-512 float32 batches.
-        n_simul = (vlen==16 && is_same_v<T0,float>) ? size_t(8) : vlen;
+        // Cap AVX-512 float32 batches only for contiguous FFT axes.
+        // Strided axes retain full width, with adaptive SIMD tails below.
+        n_simul = (nostride && vlen==16 && is_same_v<T0,float>)
+          ? size_t(8) : vlen;
         // Limit contiguous transforms to the L2 working set.
         if (nostride)
           while ((n_simul>1) && (wss(n_simul)>l2cache)) n_simul/=2;
