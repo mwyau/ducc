@@ -258,6 +258,60 @@ def build_scientific_cases(suite):
     return cases
 
 
+def build_boundary_cases(suite):
+    """Practical long FFTs surrounding the default four-wide plan limit."""
+    cases = []
+    dtypes = ("complex64", "complex128")
+    if suite == "long":
+        lengths = (65536, 81920, 98304, 99996, 100000, 100004,
+                   100352, 122880, 131064, 131072, 131080, 262144)
+        for dtype in dtypes:
+            for n in lengths:
+                for threads in (1, 4):
+                    for forward in (True, False):
+                        add(cases, suite, "c2c", (n,), dtype,
+                            threads=threads, forward=forward,
+                            inplace=n in (65536, 131072))
+    elif suite == "batched":
+        batches = ((8, 65536), (8, 100000), (16, 100000),
+                   (8, 100004), (16, 100004),
+                   (8, 100352), (16, 100352),
+                   (8, 122880), (16, 122880),
+                   (8, 131064), (16, 131064),
+                   (16, 131072), (16, 262144))
+        for dtype in dtypes:
+            for batch, n in batches:
+                for threads in (1, 4):
+                    add(cases, suite, "c2c", (batch, n), dtype,
+                        axes=(1,), threads=threads)
+    elif suite == "strided":
+        # No four-point transforms: >=8 independent scientific FFTs.
+        shapes = ((8, 65536), (16, 100000), (16, 100352),
+                  (16, 131064), (16, 131072))
+        for dtype in dtypes:
+            for shape in shapes:
+                for layout in ("F", "step2"):
+                    for threads in (1, 4):
+                        add(cases, suite, "c2c", shape, dtype,
+                            axes=(1,), layout=layout, threads=threads)
+    elif suite == "nd":
+        for dtype in dtypes:
+            for shape in ((128, 256), (256, 512), (64, 128, 128)):
+                axes_list = (tuple(range(len(shape))), (len(shape)-1,))
+                layouts = ("C", "F") if len(shape)==2 else ("C",)
+                for axes in axes_list:
+                    for threads in (1, 4):
+                        for layout in layouts:
+                            add(cases, suite, "c2c", shape, dtype,
+                                axes=axes, layout=layout, threads=threads)
+    else:
+        raise ValueError(suite)
+    case_ids = [c["case_id"] for c in cases]
+    if len(case_ids) != len(set(case_ids)):
+        raise RuntimeError("duplicate boundary benchmark cases")
+    return cases
+
+
 def cpu_info():
     text = Path("/proc/cpuinfo").read_text(errors="replace") if Path(
         "/proc/cpuinfo").exists() else ""
@@ -439,6 +493,8 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--scientific", action="store_true",
                         help="Use scientific FFT sizes, grids and batches")
+    parser.add_argument("--boundary", action="store_true",
+                        help="Test long FFT four-wide upper-bound crossover")
     parser.add_argument("--shard", type=int, required=True)
     parser.add_argument("--replicate", type=int, required=True)
     parser.add_argument("--samples", type=int, default=7)
@@ -457,8 +513,9 @@ def main():
     expected_root = Path(os.environ["DUCC_EXPECTED_INSTALL"]).resolve()
     if not Path(source_path).is_relative_to(expected_root):
         raise RuntimeError(f"module leaked from wrong wheel: {source_path}")
-    cases = (build_scientific_cases(args.suite)
-             if args.scientific else build_cases(args.suite))
+    cases = (build_boundary_cases(args.suite) if args.boundary else
+             build_scientific_cases(args.suite) if args.scientific else
+             build_cases(args.suite))
     if args.limit:
         cases = cases[:args.limit]
     metadata = dict(**cpu, suite=args.suite, shard=args.shard,
