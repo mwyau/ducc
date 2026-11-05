@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare one-line strided SIMD width candidate vs unchanged and upstream.
+"""Compare restored four-wide FFT upper bound vs unchanged SIMD and upstream.
 
 Raw paired speedup is the primary estimator. Optional fast-mode selection
 is computed from upstream-v3 only; both estimates are retained to reveal
@@ -101,15 +101,16 @@ def format_case(row):
 def markdown(cases, summaries, shards, errors, modes, clusters, expected):
     cpus = sorted({(r["cpu_model"],r["cpu_isa"]) for r in summaries})
     lines = [
-        "# Full-width strided SIMD policy: scientific FFT A/B benchmarks", "",
+        "# Default four-wide upper-bound restoration: scientific FFT A/B benchmarks", "",
         "**Speedup = reference runtime / candidate runtime.** "
         "Values above 1x mean the candidate is faster.",
         "",
         "Pinned sources: upstream 757145c3; unchanged SIMD f80b9878; "
-        "strided full-width candidate 36684e01. All builds use "
-        "normal caching and multiarch-strip. Every runner covers "
-        "the same scientific cases with 11 timing samples per case "
-        "and rotated profile order.",
+        "four-wide bound candidate f5dfdb30. This restores the "
+        "ip<=100000 upper limit only for ordinary four-wide SIMD, "
+        "preserving the ip>=256 lower bound and opt-in eight-wide plans. "
+        "All builds use normal caching and multiarch-strip; 11 timings "
+        "per case with rotated profile order.",
         "",
         "Raw paired speedup is the primary estimate. Within-series "
         "fast-mode speedup is a sensitivity measure. All available "
