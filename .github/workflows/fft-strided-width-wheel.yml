@@ -1,0 +1,39 @@
+name: Build and verify FFT full-width strided test
+on:
+  push:
+    branches: [test/fft-strided-full-width-20261105]
+    paths: [.github/workflows/fft-strided-width-wheel.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      DUCC0_OPTIMIZATION: multiarch-strip
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Build pinned candidate wheel
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install pytest numpy scipy
+          mkdir -p dist
+          python -m pip wheel --no-cache-dir --no-deps -w dist .
+          python -m pip install --no-deps dist/ducc0-*.whl
+          python -m pytest python/test/test_fft.py -q -x
+          python - <<'PY'
+          import ducc0
+          print("BUILT", ducc0.__file__, "PSABI", ducc0.misc.psabi_level())
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fft-strided-full-width-candidate-wheel
+          path: dist/*.whl
+          retention-days: 7
