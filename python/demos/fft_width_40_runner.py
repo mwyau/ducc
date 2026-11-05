@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""All-suite paired FFT benchmark of a strided-tail scheduler fix.
+"""A/B test of strided FFT SIMD width on the full scientific workload suite.
 
-Each runner builds pinned upstream, unchanged avx-512-improvements and the
-strided-tail fix; executes upstream v1/v3/v4 and both candidate v3/v4
-profiles; and runs ALL eight FFT families with eleven timing samples.
+Every runner builds pinned upstream, unchanged fft-simd-improvements, and
+the one-line strided-width candidate, rotating their ordering. All suites
+use eleven timing samples per case, with native CPU/ISA metadata.
 """
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ import traceback
 BASE = "757145c328d4680fc23bf37e372860fa49c4d8b5"
 VERSIONS = {
     "upstream": BASE,
-    "original": "63613dd691ecb90d2a58c225b6703badf6a8f293",
-    "fixed": "3714de1c907616a0f787f3a9551bbe0d63222485",
+    "original": "f80b987891bd34d367c414dc2f27a13e42f4cb94",
+    "fixed": "36684e017e6343fcab323f5d32f8357bc3b8a05c",
 }
 SUITES = ("1d", "batched", "strided", "nd", "long", "real",
           "r2r", "convolution")
@@ -99,8 +99,9 @@ def main():
         dict(replicate=args.replicate, versions=VERSIONS,
              suites=SUITES, profiles=PROFILES,
              optimization=os.environ.get("DUCC0_OPTIMIZATION"),
-             note="All three independently built sources use identical "
-                  "default cache settings and multiarch-strip flags."),
+             note="Independent pinned builds with normal FFT plan cache "
+                  "and multiarch-strip; only SIMD width eligibility differs "
+                  "between original and fixed."),
         indent=2) + "\n")
     fail = []
     for variant, sha in VERSIONS.items():
@@ -173,11 +174,12 @@ def main():
                 fail.append(f"import {suite} {profile}")
                 continue
             rc = run([sys.executable,
-                      str(repo / "python/demos/fft_40runner_matrix.py"),
+                      str(repo / "python/demos/fft_scientific_40_matrix.py"),
                       "--suite", suite,
                       "--profile", profile,
                       "--shard", str(args.replicate - 1),
                       "--replicate", str(args.replicate),
+                      "--scientific",
                       "--samples", "11", "--target-ms", "4",
                       "--output", str(directory)],
                      env=env, log=directory / "benchmark.txt",
