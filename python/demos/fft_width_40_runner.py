@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""A/B test of strided FFT SIMD width on the full scientific workload suite.
+"""A/B test of the restored default four-wide FFT upper bound.
 
 Every runner builds pinned upstream, unchanged fft-simd-improvements, and
-the one-line strided-width candidate, rotating their ordering. All suites
+the four-wide bound candidate, rotating their ordering. All suites
 use eleven timing samples per case, with native CPU/ISA metadata.
 """
 from __future__ import annotations
@@ -20,10 +20,9 @@ BASE = "757145c328d4680fc23bf37e372860fa49c4d8b5"
 VERSIONS = {
     "upstream": BASE,
     "original": "f80b987891bd34d367c414dc2f27a13e42f4cb94",
-    "fixed": "36684e017e6343fcab323f5d32f8357bc3b8a05c",
+    "fixed": "f5dfdb3096fe7af20797515aecaa610dcbb6ba31",
 }
-SUITES = ("1d", "batched", "strided", "nd", "long", "real",
-          "r2r", "convolution")
+SUITES = ("long", "batched", "strided", "nd")
 PROFILES = (
     ("upstream", 1), ("upstream", 3), ("upstream", 4),
     ("original", 3), ("original", 4),
@@ -99,9 +98,9 @@ def main():
         dict(replicate=args.replicate, versions=VERSIONS,
              suites=SUITES, profiles=PROFILES,
              optimization=os.environ.get("DUCC0_OPTIMIZATION"),
-             note="Independent pinned builds with normal FFT plan cache "
-                  "and multiarch-strip; only SIMD width eligibility differs "
-                  "between original and fixed."),
+             note="Pinned cached multiarch-strip builds; candidate restores "
+                  "ip<=100000 only for default four-wide SIMD, retaining "
+                  "ip>=256 and opt-in eight-wide eligibility."),
         indent=2) + "\n")
     fail = []
     for variant, sha in VERSIONS.items():
@@ -179,7 +178,7 @@ def main():
                       "--profile", profile,
                       "--shard", str(args.replicate - 1),
                       "--replicate", str(args.replicate),
-                      "--scientific",
+                      "--boundary",
                       "--samples", "11", "--target-ms", "4",
                       "--output", str(directory)],
                      env=env, log=directory / "benchmark.txt",
@@ -191,8 +190,8 @@ def main():
     if fail:
         raise SystemExit(f"{len(fail)} failed commands: " +
                          ", ".join(fail[:15]))
-    print("Completed all eight FFT suites across three pinned source builds "
-          "and 11 samples per case.",
+    print("Completed four FFT suites covering long boundaries and "
+          "scientific controls, with 11 samples per case.",
           flush=True)
 
 
